@@ -190,9 +190,14 @@ pub fn fit(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (even(src_w as f64 * scale), even(src_h as f64 * scale))
 }
 
-fn with_filters(base: String, extra: Option<&str>) -> String {
+/// `base` (which scales to `width` x `height`), then `extra`. The frames are
+/// read back as raw `width` x `height` pixels, so when `extra` changes the
+/// size (a crop does) they are scaled back to it: the stage draws a picture
+/// into its own box whatever its pixels' shape, but a reader of the wrong
+/// size shears every row.
+fn with_filters(base: String, extra: Option<&str>, width: u32, height: u32) -> String {
     match extra {
-        Some(extra) => format!("{base},{extra}"),
+        Some(extra) => format!("{base},{extra},scale={width}:{height}:flags=bilinear"),
         None => base,
     }
 }
@@ -214,7 +219,12 @@ pub fn still(path: &Path, at: Time, width: u32, height: u32, filters: Option<&st
         .arg("-i")
         .arg(path)
         .args(["-frames:v", "1", "-an", "-sn", "-vf"])
-        .arg(with_filters(format!("scale={width}:{height}:flags=bilinear"), filters))
+        .arg(with_filters(
+            format!("scale={width}:{height}:flags=bilinear"),
+            filters,
+            width,
+            height,
+        ))
         .args(["-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1"])
         .stderr(Stdio::null())
         .output()?;
@@ -244,6 +254,8 @@ fn last_still(path: &Path, at: Time, width: u32, height: u32, filters: Option<&s
         .arg(with_filters(
             format!("reverse,trim=end_frame=1,scale={width}:{height}:flags=bilinear"),
             filters,
+            width,
+            height,
         ))
         .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1"])
         .stderr(Stdio::null())
@@ -439,6 +451,8 @@ impl FrameStream {
         let vf = with_filters(
             format!("setpts=(PTS-STARTPTS)/{speed:.6},fps={fps},scale={width}:{height}:flags=fast_bilinear"),
             filters,
+            width,
+            height,
         );
         let decode = {
             let path = path.to_path_buf();
@@ -645,6 +659,80 @@ mod tests {
             peaks(&pcm, SECOND / 100).iter().any(|&p| p > 40),
             "a 1/8-amplitude tone shows as about 90"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Red on the left quarter, blue elsewhere; None when ffmpeg is missing.
+    fn halves(dir: &Path) -> Option<PathBuf> {
+        if !available() {
+            return None;
+        }
+        let path = dir.join("halves.mp4");
+        let status = Command::new(ffmpeg().ok()?)
+            .args([
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=red:s=32x36:r=25:d=1",
+            ])
+            .args(["-f", "lavfi", "-i", "color=blue:s=96x36:r=25:d=1"])
+            .args([
+                "-filter_complex",
+                "[0][1]hstack",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv444p",
+            ])
+            .arg(&path)
+            .status()
+            .ok()?;
+        status.success().then_some(path)
+    }
+
+    /// Whether every row runs red at its left edge and blue at its right:
+    /// a frame read at the wrong size shears, and the edges wander.
+    fn upright(image: &RenderImage, width: u32, height: u32) -> bool {
+        let bytes = image.as_bytes(0).unwrap();
+        let px = |x: u32, y: u32| {
+            let i = ((y * width + x) * 4) as usize;
+            (bytes[i], bytes[i + 1], bytes[i + 2]) // b, g, r
+        };
+        (0..height).all(|y| {
+            let (lb, _, lr) = px(0, y);
+            let (rb, _, rr) = px(width - 1, y);
+            lr > 180 && lb < 80 && rb > 180 && rr < 80
+        })
+    }
+
+    #[test]
+    fn a_crop_keeps_frames_the_size_they_are_read_at() {
+        let dir = std::env::temp_dir().join(format!("splice-ffmpeg-crop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let Some(path) = halves(&dir) else { return };
+        // Cut a tenth off the left: a quarter of the picture stays red, now
+        // a ninth narrower, and the frame is no longer 64 wide.
+        let crop = "crop=w='trunc(iw*0.9/2)*2':h='trunc(ih*0.86/2)*2':x='iw*0.1':y='ih*0.14'";
+        let (w, h) = (64, 18);
+
+        let image = still(&path, SECOND / 2, w, h, Some(crop)).unwrap();
+        assert!(upright(&image, w, h), "a still");
+
+        for speed in [1.0, 2.0] {
+            let mut stream = FrameStream::open(&path, 0, 30, w, h, Some(crop), speed, false).unwrap();
+            let start = std::time::Instant::now();
+            let mut frames = 0;
+            while frames < 5 && start.elapsed() < std::time::Duration::from_secs(5) {
+                if let Some(image) = stream.try_next() {
+                    assert!(upright(&image, w, h), "frame {frames} at {speed}x");
+                    frames += 1;
+                }
+            }
+            assert_eq!(frames, 5);
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

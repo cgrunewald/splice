@@ -198,6 +198,10 @@ impl Render for Editor {
         if self.player.busy() {
             window.request_animation_frame();
         }
+        // The teleprompter rolls a frame at a time.
+        if self.tick_prompter() {
+            window.request_animation_frame();
+        }
 
         // Typing a title ends when the text field loses the keyboard.
         let choosing_font = matches!(self.overlay, Overlay::Fonts { .. });
@@ -303,6 +307,8 @@ impl Render for Editor {
             .on_action(cx.listener(|this, _: &AddBeat, window, cx| this.new_beat(window, cx)))
             .on_action(cx.listener(|this, _: &AddCue, window, cx| this.new_cue(window, cx)))
             .on_action(cx.listener(|this, _: &CopyShotList, _, cx| this.copy_shot_list(cx)))
+            .on_action(cx.listener(|this, _: &LoadScript, _, cx| this.load_script(cx)))
+            .on_action(cx.listener(|this, _: &CutToScript, _, cx| this.cut_to_script_action(cx)))
             .on_action(cx.listener(|this, _: &RecordScreen, window, cx| this.open_record(window, cx)))
             .on_action(cx.listener(|this, _: &PasteReference, _, cx| this.paste_reference(cx)))
             .on_action(cx.listener(|this, _: &ChooseFont, window, cx| {

@@ -19,6 +19,25 @@ pub struct CueId(pub u64);
 #[serde(transparent)]
 pub struct ShotId(pub u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DirectionId(pub u64);
+
+/// A note for whoever cuts a beat, a person or a model: "zoom in on the
+/// chart", "fade out". Ticked off once the cut does it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Direction {
+    pub id: DirectionId,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub done: bool,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// A shot planned for a beat: what it is, and a picture of what it should
 /// look like (a sketch, a screenshot, a frame from somewhere).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,6 +77,13 @@ pub struct Beat {
     /// What to capture: the shots, the screen, the sound.
     #[serde(default)]
     pub capture: String,
+    /// What is said in it, word for word: what the teleprompter shows, and
+    /// what a recording of it being read is cut by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub script: String,
+    /// How to cut it: notes for the editor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directions: Vec<Direction>,
     pub duration: Time,
     /// 0xRRGGBB.
     pub color: u32,
@@ -209,6 +235,8 @@ impl Project {
             title: title.to_string(),
             story: String::new(),
             capture: String::new(),
+            script: String::new(),
+            directions: Vec::new(),
             duration: duration.max(self.frame()),
             color,
             shots: Vec::new(),
@@ -516,6 +544,47 @@ impl Project {
         }
     }
 
+    /// Adds a direction to a beat. Returns its id.
+    pub fn add_direction(&mut self, beat: BeatId, note: &str) -> Option<DirectionId> {
+        self.story.index(beat)?;
+        let id = DirectionId(self.alloc());
+        self.set_beat(beat, |b| {
+            b.directions.push(Direction {
+                id,
+                note: note.trim().to_string(),
+                done: false,
+            })
+        });
+        Some(id)
+    }
+
+    /// The beat a direction belongs to.
+    pub fn direction_beat(&self, direction: DirectionId) -> Option<BeatId> {
+        self.story
+            .beats
+            .iter()
+            .find(|b| b.directions.iter().any(|d| d.id == direction))
+            .map(|b| b.id)
+    }
+
+    pub fn set_direction(&mut self, direction: DirectionId, f: impl FnOnce(&mut Direction)) {
+        if let Some(d) = self
+            .story
+            .beats
+            .iter_mut()
+            .flat_map(|b| b.directions.iter_mut())
+            .find(|d| d.id == direction)
+        {
+            f(d);
+        }
+    }
+
+    pub fn remove_direction(&mut self, direction: DirectionId) {
+        for beat in &mut self.story.beats {
+            beat.directions.retain(|d| d.id != direction);
+        }
+    }
+
     /// Adds a reference shot to a beat. Returns its id.
     pub fn add_shot(&mut self, beat: BeatId, note: &str, image: Option<Still>) -> Option<ShotId> {
         self.story.index(beat)?;
@@ -653,6 +722,16 @@ impl Project {
                     beat.capture.trim().replace('\n', "\n            ")
                 ));
             }
+            if !beat.script.trim().is_empty() {
+                out.push_str(&format!(
+                    "   Says: {}\n",
+                    beat.script.trim().replace('\n', "\n         ")
+                ));
+            }
+            for d in beat.directions.iter().filter(|d| !d.note.trim().is_empty()) {
+                let done = if d.done { "  [done]" } else { "" };
+                out.push_str(&format!("   Direction: {}{done}\n", d.note.trim()));
+            }
             for (i, shot) in beat.shots.iter().enumerate() {
                 let note = if shot.note.trim().is_empty() {
                     "(no note)"
@@ -787,6 +866,28 @@ mod tests {
         p.remove_shot(one);
         assert_eq!(p.story.beats[0].shots.len(), 1);
         assert!(p.add_shot(BeatId(999), "x", None).is_none());
+    }
+
+    #[test]
+    fn directions_are_notes_for_the_cut_that_get_ticked_off() {
+        let (mut p, _) = project();
+        let a = p.add_beat(None, "Hook", 2 * SECOND);
+        let zoom = p.add_direction(a, " Zoom in on the chart ").unwrap();
+        let fade = p.add_direction(a, "Fade out").unwrap();
+        assert_eq!(p.direction_beat(fade), Some(a));
+        p.set_direction(zoom, |d| d.done = true);
+        p.set_beat(a, |b| b.script = "Here is the thing.".into());
+        let list = p.shot_list();
+        assert!(list.contains("Says: Here is the thing."), "{list}");
+        assert!(list.contains("Direction: Zoom in on the chart  [done]"), "{list}");
+        assert!(list.contains("Direction: Fade out\n"), "{list}");
+        p.remove_direction(zoom);
+        assert_eq!(p.story.beats[0].directions.len(), 1);
+        assert!(p.add_direction(BeatId(999), "x").is_none());
+        // A beat without either reads as it always did.
+        let b = p.add_beat(None, "Plain", SECOND);
+        let json = serde_json::to_string(p.story.beats.iter().find(|x| x.id == b).unwrap()).unwrap();
+        assert!(!json.contains("script") && !json.contains("directions"), "{json}");
     }
 
     #[test]

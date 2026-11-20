@@ -26,6 +26,10 @@ pub enum Target {
     Title(BeatId),
     Story(BeatId),
     Capture(BeatId),
+    /// What is said in a beat.
+    Script(BeatId),
+    /// A note for the cut.
+    Direction(splice_core::story::DirectionId),
     Cue(CueId),
     Shot(splice_core::story::ShotId),
     /// A bible entry's name, and its continuity words.
@@ -170,6 +174,14 @@ impl Editor {
             Target::Title(id) => beat(id)?.title.clone(),
             Target::Story(id) => beat(id)?.story.clone(),
             Target::Capture(id) => beat(id)?.capture.clone(),
+            Target::Script(id) => beat(id)?.script.clone(),
+            Target::Direction(id) => story
+                .beats
+                .iter()
+                .flat_map(|b| &b.directions)
+                .find(|d| d.id == id)?
+                .note
+                .clone(),
             Target::Cue(id) => story.cues.iter().find(|c| c.id == id)?.label.clone(),
             Target::Shot(id) => story
                 .beats
@@ -189,6 +201,8 @@ impl Editor {
             Target::Title(id) => p.set_beat(id, |b| b.title = text),
             Target::Story(id) => p.set_beat(id, |b| b.story = text),
             Target::Capture(id) => p.set_beat(id, |b| b.capture = text),
+            Target::Script(id) => p.set_beat(id, |b| b.script = text),
+            Target::Direction(id) => p.set_direction(id, |d| d.note = text),
             Target::Cue(id) => p.set_cue(id, |c| c.label = text),
             Target::Shot(id) => p.set_shot(id, |s| s.note = text),
             Target::EntryName(id) => p.set_entry(id, |e| e.name = text),
@@ -212,7 +226,7 @@ impl Editor {
             cursor: text.len(),
             all,
         });
-        if let Target::Title(id) | Target::Story(id) | Target::Capture(id) = target {
+        if let Target::Title(id) | Target::Story(id) | Target::Capture(id) | Target::Script(id) = target {
             self.beat = Some(id);
         }
         window.focus(&self.story_focus);
@@ -222,6 +236,12 @@ impl Editor {
     /// Ends typing: what was typed becomes one undo step.
     pub(super) fn end_typing(&mut self, cx: &mut Context<Self>) {
         if let Some(typing) = self.typing.take() {
+            // A direction left without words was never one.
+            if let Target::Direction(id) = typing.target
+                && self.text_of(typing.target).is_some_and(|t| t.trim().is_empty())
+            {
+                self.doc.project.remove_direction(id);
+            }
             self.doc.commit(typing.before);
             cx.notify();
         }
@@ -265,7 +285,7 @@ impl Editor {
         };
         let one_line = matches!(
             target,
-            Target::Title(_) | Target::Cue(_) | Target::Shot(_) | Target::EntryName(_)
+            Target::Title(_) | Target::Cue(_) | Target::Shot(_) | Target::EntryName(_) | Target::Direction(_)
         );
         match k.key.as_str() {
             "escape" => {
@@ -286,6 +306,7 @@ impl Editor {
                 let next = match target {
                     Target::Title(id) => Some(Target::Story(id)),
                     Target::Story(id) => Some(Target::Capture(id)),
+                    Target::Capture(id) => Some(Target::Script(id)),
                     Target::EntryName(id) => Some(Target::EntryWords(id)),
                     _ => None,
                 };
@@ -555,6 +576,15 @@ impl Editor {
                             .on_click(cx.listener(|this, _, _, cx| this.copy_brief(cx))),
                     )
                     .child(
+                        header_button("story-script", "script", "Script")
+                            .tooltip(tip(
+                                "Load a script (a text file): a beat for each heading or paragraph, its lines to \
+                                 read from the teleprompter in Record; [square brackets] become directions",
+                                None,
+                            ))
+                            .on_click(cx.listener(|this, _, _, cx| this.load_script(cx))),
+                    )
+                    .child(
                         header_button("story-copy", "copy", "Shot list")
                             .tooltip(tip("Copy the story as a shot list", None))
                             .on_click(cx.listener(|this, _, _, cx| this.copy_shot_list(cx))),
@@ -596,7 +626,9 @@ impl Editor {
                                 .child(
                                     "Each beat is a stretch of the movie, end to end along the timeline. Say what \
                                      happens and what to capture; drop media on a beat to lay it in, or record \
-                                     the screen straight into it. Drag cards to reorder: their footage follows.",
+                                     the screen straight into it. Drag cards to reorder: their footage follows. \
+                                     Reading to camera? Load a script: each part becomes a beat, and Record shows \
+                                     it on a teleprompter.",
                                 ),
                         )
                     }),
@@ -845,6 +877,7 @@ impl Editor {
                         cx,
                     ))),
             )
+            .child(self.script_rows(beat, cx))
             .child(div().flex_1())
             .child(
                 div()
@@ -1063,6 +1096,11 @@ impl Editor {
             "duration": secs(beat.duration),
             "story": beat.story,
             "capture": beat.capture,
+            "script": beat.script,
+            "words": splice_core::script::words(&beat.script),
+            "directions": beat.directions.iter().map(|d| serde_json::json!({
+                "direction": d.id.0, "note": d.note, "done": d.done,
+            })).collect::<Vec<_>>(),
             "color": format!("#{:06x}", beat.color),
             "coverage": match project.coverage(beat.id) {
                 Coverage::Empty => "empty",
@@ -1156,10 +1194,18 @@ impl Editor {
                     return fail(format!("no beat {}", a.0));
                 }
                 let title = text("title").unwrap_or_else(|| format!("Beat {}", self.doc.project.story.beats.len() + 1));
-                let (story, capture) = (text("story"), text("capture"));
+                let (story, capture, script) = (text("story"), text("capture"), text("script"));
+                // Lines without a length: as long as they take to say.
+                let said = script
+                    .as_deref()
+                    .map(|s| splice_core::script::read_time(s, self.studio().prompter.pace))
+                    .filter(|t| *t > 0);
                 let id = self.edit(cx, |p| {
-                    let id = p.add_beat(after, &title, duration.unwrap_or(BEAT_DURATION));
+                    let id = p.add_beat(after, &title, duration.or(said).unwrap_or(BEAT_DURATION));
                     p.set_beat(id, |b| {
+                        if let Some(s) = script {
+                            b.script = s;
+                        }
                         if let Some(s) = story {
                             b.story = s;
                         }
@@ -1180,10 +1226,13 @@ impl Editor {
                     Ok(id) => id,
                     Err(e) => return fail(e),
                 };
-                let (title, story, capture) = (text("title"), text("story"), text("capture"));
+                let (title, story, capture, script) = (text("title"), text("story"), text("capture"), text("script"));
                 self.typing = None;
                 self.edit(cx, |p| {
                     p.set_beat(id, |b| {
+                        if let Some(s) = script {
+                            b.script = s;
+                        }
                         if let Some(t) = title {
                             b.title = t;
                         }
@@ -1243,6 +1292,8 @@ impl Editor {
                     None => fail("that media could not be placed"),
                 }
             }
+            ("story", "script") => self.ctl_script(request, cx),
+            ("story", "direction") => self.ctl_direction(request, cx),
             ("cue", "add") => {
                 let at = match self.time(request, "at") {
                     Ok(t) => t.unwrap_or(self.player.position),

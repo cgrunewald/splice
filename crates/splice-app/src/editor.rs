@@ -35,6 +35,7 @@ mod input;
 mod inspector;
 mod made;
 mod plan;
+mod prompter;
 mod record;
 mod render;
 mod reuse;
@@ -1262,6 +1263,10 @@ impl Editor {
     // Commands.
 
     fn play_pause(&mut self, _: &PlayPause, _: &mut Window, cx: &mut Context<Self>) {
+        // In Record, with the teleprompter up, space rolls the script.
+        if self.prompting() {
+            return self.roll_prompter(None, cx);
+        }
         if self.player.is_playing() {
             self.stop(cx);
         } else if self.doc.project.duration() > 0 {

@@ -190,6 +190,9 @@ impl Editor {
             "story" if matches!(request["sub"].as_str(), Some("cast" | "brief" | "take")) => {
                 return self.ctl_plan(request, reply, cx);
             }
+            "story" if matches!(request["sub"].as_str(), Some("match" | "cut")) => {
+                return self.ctl_reading(request, reply, cx);
+            }
             "bible" => return self.ctl_bible(request, reply, cx),
             "captions" => return self.ctl_captions(request, reply, cx),
             "transition" | "speed" | "freeze" | "keyframe" | "leak" | "zoom" => self.ctl_effects(cmd, request, cx),

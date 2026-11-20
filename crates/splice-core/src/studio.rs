@@ -31,6 +31,9 @@ pub struct Studio {
     #[serde(skip_serializing_if = "untouched")]
     pub camera_look: Look,
     pub output: Output,
+    /// The teleprompter: whether the script shows over the scene, and how.
+    #[serde(skip_serializing_if = "crate::script::Prompter::is_default")]
+    pub prompter: crate::script::Prompter,
 }
 
 fn untouched(look: &Look) -> bool {

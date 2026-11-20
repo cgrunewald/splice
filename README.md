@@ -256,6 +256,16 @@ while you cut it.
 - **Footage belongs to the beat it starts in.** Reordering, resizing or
   removing beats carries the footage along. Removing a beat never deletes
   footage.
+- **A script:** each beat can hold the lines said in it. **Script** on the
+  board (or Load script… in Record) reads a text file into beats:
+  - a line starting with `#` begins a beat and names it; without any, each
+    paragraph is a beat;
+  - anything in `[square brackets]` is a direction, not said;
+  - each beat is as long as its lines take to say, and you can edit the
+    lines on its card.
+- **Directions** are notes on a beat for whoever cuts it, a person or an
+  assistant: "zoom in on the chart", "fade out". Add them on the card and
+  tick each off when the cut does what it says.
 - **Reference shots:** each beat can hold any number, each a picture of what
   a shot should look like, with a note.
   - Ways to add them:
@@ -314,6 +324,16 @@ yourself and your screen. Nothing extra to install.
   or 1080p. Files are written in one-second pieces, so a crash keeps what
   was recorded.
 - **Pause** and resume within a take. Clicks are noted, to zoom in on later.
+- **Teleprompter:** switch it on in Record and the story's script shows over
+  the scene in big letters, beat by beat, rolling past a reading line at a
+  pace you set (words a minute) while the take records. It is never in the
+  recording. Space rolls and pauses it to rehearse; scroll to move it.
+- **Cut to the script:** select the take you read and run "Cut the selected
+  take to the script" from the command menu (⌘/), or ask your assistant.
+  Splice hears the take (whisper.cpp, on this Mac), finds where each beat's
+  lines were read, and lays each reading into its beat on every layer of
+  the take. A line fluffed and said again keeps the last good reading; the
+  false starts and gaps leave the timeline. One undo step.
 - **Voice clean-up**, like OBS's mic filters: rumble cut, steady noise (fans,
   hiss, hum) lowered, and the level evened out. Switch it on for the mic in
   Record, or for any clip under Sound in the inspector; the file stays as

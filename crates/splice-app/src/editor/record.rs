@@ -74,6 +74,8 @@ pub struct Recorder {
     sliding: Option<(Feed, Knob, Project)>,
     /// Where each slider's track was drawn.
     tracks: Tracks,
+    /// The teleprompter as it rolls.
+    pub prompt: super::prompter::Prompt,
 }
 
 /// Where each slider's track was drawn, measured as it is painted.
@@ -391,11 +393,22 @@ impl Editor {
         }
         for h in happened {
             match h {
-                Happened::Recording => self.say("Recording"),
-                Happened::Paused => self.say("Paused"),
-                Happened::Resumed => self.say("Recording"),
+                // The script rolls with the take.
+                Happened::Recording => {
+                    self.say("Recording");
+                    self.roll_prompter(Some(true), cx);
+                }
+                Happened::Paused => {
+                    self.say("Paused");
+                    self.roll_prompter(Some(false), cx);
+                }
+                Happened::Resumed => {
+                    self.say("Recording");
+                    self.roll_prompter(Some(true), cx);
+                }
                 Happened::Warning(w) => self.say(w),
                 Happened::Stopped(Ok(take)) => {
+                    self.roll_prompter(Some(false), cx);
                     let into = self.rec.into.take().unwrap_or(Into::End);
                     let reply = std::mem::take(&mut self.rec.waiters).into_iter().next();
                     self.import_take(take, into, reply, cx);
@@ -776,6 +789,7 @@ impl Editor {
                         .flex_col()
                         .gap(px(14.0))
                         .child(self.sources_panel(&studio, cx))
+                        .child(self.prompter_panel(&studio, cx))
                         .child(self.output_panel(&studio, cx)),
                 ),
             )
@@ -931,6 +945,8 @@ impl Editor {
             Bounds::new(area.origin + point(px(left + x), px(top + y)), size(px(w), px(h)))
         };
         self.rec.drawn = (Some(at(0.0, 0.0, w, h)), bubble.map(|[l, t, bw, bh]| at(l, t, bw, bh)));
+        // The script to read, over it all (and never in the recording).
+        let prompter = self.render_prompter(studio, area, cx);
         let failed = self.rec.problem.is_some();
         let status = if let Some(problem) = &self.rec.problem {
             Some(problem.clone())
@@ -992,6 +1008,7 @@ impl Editor {
                         )
                     }),
             )
+            .children(prompter)
             .into_any_element()
     }
 
@@ -2021,7 +2038,9 @@ impl Editor {
                 "problem": self.rec.problem,
                 "asking": self.rec.live.as_ref().and_then(|l| l.asking.clone()),
                 "last": self.rec.last,
+                "prompter": self.prompter_json(),
             })),
+            "prompter" => Some(self.ctl_prompter(request, cx)),
             "start" => {
                 if let Err(e) = self.apply_setup(request, cx) {
                     return Some(fail(e));
@@ -2082,7 +2101,7 @@ impl Editor {
                 }
             }
             other => Some(fail(format!(
-                "unknown `record {other}`: use sources, setup, start, pause, resume, stop or status"
+                "unknown `record {other}`: use sources, setup, prompter, start, pause, resume, stop or status"
             ))),
         }
     }
@@ -2410,7 +2429,7 @@ fn chip(id: impl std::convert::Into<gpui::ElementId>, label: &str, on: bool) -> 
         .child(label.to_string())
 }
 
-fn switch(on: bool) -> impl IntoElement {
+pub(super) fn switch(on: bool) -> impl IntoElement {
     div()
         .w(px(26.0))
         .h(px(15.0))

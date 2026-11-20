@@ -1233,7 +1233,7 @@ impl Editor {
                 // Lines without a length: as long as they take to say.
                 let said = script
                     .as_deref()
-                    .map(|s| splice_core::script::read_time(s, self.studio().prompter.pace))
+                    .map(|s| splice_core::script::read_time(s, self.studio().prompter.clamped().pace))
                     .filter(|t| *t > 0);
                 let id = self.edit(cx, |p| {
                     let id = p.add_beat(after, &title, duration.or(said).unwrap_or(BEAT_DURATION));

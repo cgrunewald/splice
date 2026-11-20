@@ -114,7 +114,10 @@ make install-app   # Splice.app in /Applications
   captions over it, each word lighting up as it is said. Any language whisper
   knows works; Japanese and Chinese, written without spaces, are grouped into
   words to light up and set in one font that has them. Each caption is a
-  title you can edit. `.srt` and `.vtt` files load too.
+  title you can edit. Where the clip is a reading of the story's script, the
+  captions take the script's spelling, capitals and punctuation, at the times
+  the words were heard; anything said off script stays as heard.
+  `.srt` and `.vtt` files load too.
 - **Colour** shelf: full-frame colours for backgrounds and title cards, a
   half-black tint, and light leaks that wash warm or cool light over a shot.
 - **Letterbox** (the canvas inspector, with nothing selected): bars that

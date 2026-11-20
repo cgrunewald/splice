@@ -91,10 +91,12 @@ Transitions, speed and keyframes
   zoom --clip C [--to 2] | --none          a screen recording made in Splice: zoom in towards each burst
                                  of clicks noted while recording (keyframes on place and size)
   leak --kind warm|sun|cool [--at T]       a light leak washing over what is there, 4s (a scene: edit as one)
-  captions --clip C [--words N] [--plain] [--wait]
+  captions --clip C [--words N] [--plain] [--heard] [--wait]
                                  hear what is said in clip C (on this Mac, whisper.cpp) and lay captions
                                  over it on a new track: lines of up to N words (6), each word lighting up
-                                 as it is said (--plain: whole lines). Each caption is a title to edit
+                                 as it is said (--plain: whole lines). Each caption is a title to edit.
+                                 Where the clip reads the story's script, the words are written as the
+                                 script has them, at the times they were heard (--heard: as heard)
   captions --file subtitles.srt  captions from an .srt or .vtt file
 
 Music (a score: instruments and notes, played by General MIDI sounds)
@@ -628,7 +630,7 @@ fn build(args: &[String]) -> Result<Value, String> {
                 request.insert(arg[2..].into(), json!(v));
             }
             "--ripple" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam" | "--drop"
-            | "--plain" | "--replace" => {
+            | "--plain" | "--replace" | "--heard" => {
                 request.insert(arg[2..].into(), json!(true));
             }
             "--done" | "--undone" => {

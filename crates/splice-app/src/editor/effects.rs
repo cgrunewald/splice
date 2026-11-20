@@ -429,6 +429,7 @@ impl Editor {
         &mut self,
         id: ClipId,
         layout: splice_core::captions::Layout,
+        as_heard: bool,
         reply: Option<std::sync::mpsc::Sender<String>>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -494,6 +495,17 @@ impl Editor {
                                 end: at(w.end),
                             })
                             .collect();
+                        // Where the clip reads the story's script, the words are the script's.
+                        let scripts: Vec<&str> = editor
+                            .doc
+                            .project
+                            .story
+                            .beats
+                            .iter()
+                            .map(|b| b.script.as_str())
+                            .filter(|s| !as_heard && splice_core::script::words(s) > 0)
+                            .collect();
+                        let (words, scripted) = splice_core::script::as_written(&scripts, &words);
                         let layout = splice_core::captions::Layout {
                             until: Some(end),
                             ..layout
@@ -501,12 +513,19 @@ impl Editor {
                         let ids = editor.edit(cx, |p| p.add_captions(&words, &layout));
                         editor.selection = ids.clone();
                         editor.say(format!(
-                            "{} captions from {} words; each is a title you can edit",
+                            "{} captions from {} words{}; each is a title you can edit",
                             ids.len(),
-                            words.len()
+                            words.len(),
+                            if scripted > 0 {
+                                ", written as the script has them"
+                            } else {
+                                ""
+                            }
                         ));
                         let clips: Vec<_> = ids.iter().map(|id| editor.clip_json(*id)).collect();
-                        editor.edited_with(serde_json::json!({ "clips": clips, "words": words.len() }))
+                        editor.edited_with(serde_json::json!({
+                            "clips": clips, "words": words.len(), "scripted_beats": scripted,
+                        }))
                     }
                     Err(e) => {
                         editor.say_error(format!("Captions: {e}"));
@@ -539,7 +558,7 @@ impl Editor {
         let Some(id) = target else {
             return self.say_error("Select a clip with speech in it to caption");
         };
-        if let Err(e) = self.caption_clip(id, Default::default(), None, cx) {
+        if let Err(e) = self.caption_clip(id, Default::default(), false, None, cx) {
             self.say_error(e);
         }
     }
@@ -583,7 +602,8 @@ impl Editor {
             layout.karaoke = false;
         }
         let wait = request.get("wait").and_then(Value::as_bool) == Some(true);
-        match self.caption_clip(id, layout, wait.then_some(reply), cx) {
+        let as_heard = request.get("heard").and_then(Value::as_bool) == Some(true);
+        match self.caption_clip(id, layout, as_heard, wait.then_some(reply), cx) {
             Err(e) => Some(fail(e)),
             Ok(()) if wait => None,
             Ok(()) => {

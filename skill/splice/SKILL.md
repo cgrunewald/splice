@@ -589,6 +589,11 @@ splice ctl record stop --wait              # answers once the take is in the pro
   `--at` or `--into media` says otherwise. The reply to `stop --wait` lists
   its media and clips. The folder (`take` in the reply) holds `screen.mp4`,
   `camera.mp4`, `microphone.m4a` and `system.m4a`.
+- `--height` caps the screen and the camera alike: the camera records at
+  the largest size it has within it (4K by default; `--height 1080` for
+  smaller files), at the frame rate nearest `--fps`. When the camera cannot
+  run at `--fps` (most webcams top out at 30), the take warns and records at
+  its fastest; set `--fps` to match the movie's canvas so it does not judder.
 - The layout is only where the take's layers are put: move or resize them
   afterwards like any clip (`look`).
 - `record adjust screen|camera` takes `look`'s options except place and

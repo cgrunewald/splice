@@ -320,9 +320,11 @@ yourself and your screen. Nothing extra to install.
   the bubble, change the layout or drop a source afterwards. In Story view,
   ⇧⌘R records into the chosen beat.
 - **Files:** H.264 or HEVC on the Mac's hardware encoder at constant quality
-  (Good, High or Best), 30 or 60 fps, and the screen at full size, 4K, 1440p
-  or 1080p. Files are written in one-second pieces, so a crash keeps what
-  was recorded.
+  (Good, High or Best), 30 or 60 fps, and the screen and camera at full
+  size, 4K, 1440p or 1080p. The camera records at the largest size it has
+  within that height, at the frame rate nearest the one asked for (a camera
+  without 60 fps records at its fastest, with a warning). Files are written
+  in one-second pieces, so a crash keeps what was recorded.
 - **Pause** and resume within a take. Clicks are noted, to zoom in on later.
 - **Teleprompter:** switch it on in Record and the story's script shows over
   the scene in big letters, beat by beat, rolling past a reading line at a

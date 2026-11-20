@@ -192,6 +192,11 @@ splice ctl style --clip 12 --animate pop --by letter     # --animate none: all a
   model downloads (the person sees a note). Read the captions back (`read`)
   and fix misheard words with `style --clip C --text …`; a caption's word
   timings stay with it as long as the number of words does not change.
+- When the story has a script and the clip is a reading of it, captions are
+  written as the script has them (spelling, capitals, punctuation) at the
+  times the words were heard; the reply's `scripted_beats` says how many
+  beats were found. Words said off script stay as heard. `--heard` captions
+  the clip as heard, ignoring the script.
 - Each caption line lights its words up as they are said (karaoke). Lines
   break at sentences and pauses, a few words each, shared evenly. Japanese and
   Chinese are grouped into words; between them the text holds an invisible

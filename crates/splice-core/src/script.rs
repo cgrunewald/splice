@@ -235,24 +235,10 @@ fn tokens(text: &str) -> Vec<String> {
 /// read more than once (a fluffed line said again) is found where it was
 /// last read well; one never read, or mostly missed, is None.
 pub fn align(scripts: &[&str], heard: &[Word]) -> Vec<Option<Reading>> {
-    // Each heard token, and the word it came from.
-    let said: Vec<(String, usize)> = heard
-        .iter()
-        .enumerate()
-        .flat_map(|(i, w)| tokens(&w.text).into_iter().map(move |t| (t, i)))
-        .collect();
-    let mut from = 0;
-    scripts
-        .iter()
-        .map(|script| {
-            let want = tokens(script);
-            let (first, end, missed) = find(&want, &said[from..])?;
-            let score = 1.0 - missed as f32 / want.len() as f32;
-            if score < HEARD_ENOUGH || first >= end {
-                return None;
-            }
-            let (a, z) = (said[from + first].1, said[from + end - 1].1);
-            from += end;
+    readings(scripts, heard)
+        .into_iter()
+        .map(|found| {
+            let (a, z, score) = found?;
             // A little air, but never into the words either side.
             let start = match a.checked_sub(1).map(|i| heard[i].end) {
                 Some(before) => (heard[a].start - AIR).max((before + heard[a].start) / 2),
@@ -274,6 +260,144 @@ pub fn align(scripts: &[&str], heard: &[Word]) -> Vec<Option<Reading>> {
             })
         })
         .collect()
+}
+
+/// The words of `heard` each script was read in, in order, as (first word,
+/// last word, how much of the script was heard there).
+fn readings(scripts: &[&str], heard: &[Word]) -> Vec<Option<(usize, usize, f32)>> {
+    // Each heard token, and the word it came from.
+    let said: Vec<(String, usize)> = heard
+        .iter()
+        .enumerate()
+        .flat_map(|(i, w)| tokens(&w.text).into_iter().map(move |t| (t, i)))
+        .collect();
+    let mut from = 0;
+    scripts
+        .iter()
+        .map(|script| {
+            let want = tokens(script);
+            let (first, end, missed) = find(&want, &said[from..])?;
+            let score = 1.0 - missed as f32 / want.len() as f32;
+            if score < HEARD_ENOUGH || first >= end {
+                return None;
+            }
+            let (a, z) = (said[from + first].1, said[from + end - 1].1);
+            from += end;
+            Some((a, z, score))
+        })
+        .collect()
+}
+
+/// The most words in a stretch heard differently from the script that is
+/// still taken as misheard, and written as the script has it. A longer
+/// stretch was said differently, and stays as heard.
+const MISHEARD: usize = 4;
+
+/// What was `heard`, written as the scripts have it wherever they were
+/// read: the script's spelling, capitals and punctuation, at the times the
+/// words were heard. A few words heard differently in a reading are taken
+/// as misheard and become the script's; words said that are not in the
+/// script stay, words of the script never said are left out, and anything
+/// outside a reading (or a longer departure from the script) stays as
+/// heard. Scripts written without spaces are left as heard. Also returns
+/// how many scripts were found.
+pub fn as_written(scripts: &[&str], heard: &[Word]) -> (Vec<Word>, usize) {
+    let mut out = Vec::with_capacity(heard.len());
+    let (mut next, mut found) = (0, 0);
+    for (script, reading) in scripts.iter().zip(readings(scripts, heard)) {
+        let Some((mut a, z, _)) = reading else { continue };
+        if a < next || script.chars().any(unspaced) {
+            continue;
+        }
+        // A reading whose opening words were misheard can be found a word
+        // late: its first word, said just before, belongs to it.
+        let wrote = written(script);
+        let first = wrote.first().map(|w| tokens(w).concat()).unwrap_or_default();
+        if a > next && !first.is_empty() && tokens(&heard[a - 1].text).concat() == first {
+            a -= 1;
+        }
+        out.extend_from_slice(&heard[next..a]);
+        out.extend(rewrite(&wrote, &heard[a..=z]));
+        next = z + 1;
+        found += 1;
+    }
+    out.extend_from_slice(&heard[next..]);
+    (out, found)
+}
+
+/// A script's words as written, marks that stand alone ("—") joined to the
+/// word before.
+fn written(script: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in script.split_whitespace() {
+        match out.last_mut() {
+            Some(last) if !word.chars().any(char::is_alphanumeric) => {
+                last.push(' ');
+                last.push_str(word);
+            }
+            _ => out.push(word.to_string()),
+        }
+    }
+    out
+}
+
+/// `heard`, one reading of `script`, with the script's words where they
+/// match or were misheard.
+fn rewrite(script: &[String], heard: &[Word]) -> Vec<Word> {
+    let key = |text: &str| tokens(text).concat();
+    let want: Vec<String> = script.iter().map(|w| key(w)).collect();
+    let said: Vec<String> = heard.iter().map(|w| key(&w.text)).collect();
+    let (n, m) = (want.len(), said.len());
+    // The longest run of words in both, in order: where the two agree.
+    let mut longest = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            longest[i][j] = if !want[i].is_empty() && want[i] == said[j] {
+                longest[i + 1][j + 1] + 1
+            } else {
+                longest[i + 1][j].max(longest[i][j + 1])
+            };
+        }
+    }
+    let mut out = Vec::with_capacity(m);
+    // Between agreements: script words `i0..i` against heard words `j0..j`.
+    let between = |out: &mut Vec<Word>, (i0, i): (usize, usize), (j0, j): (usize, usize)| {
+        let (wrote, said) = (&script[i0..i], &heard[j0..j]);
+        if wrote.is_empty() || said.is_empty() || wrote.len() > MISHEARD || said.len() > MISHEARD {
+            return out.extend_from_slice(said);
+        }
+        // The script's words share the time by their length.
+        let (start, end) = (said[0].start, said[said.len() - 1].end.max(said[0].start));
+        let all: Time = wrote.iter().map(|w| w.chars().count() as Time).sum::<Time>().max(1);
+        let mut before: Time = 0;
+        for word in wrote {
+            let len = word.chars().count() as Time;
+            out.push(Word {
+                text: word.clone(),
+                start: start + (end - start) * before / all,
+                end: start + (end - start) * (before + len) / all,
+            });
+            before += len;
+        }
+    };
+    let (mut i, mut j, mut i0, mut j0) = (0, 0, 0, 0);
+    while i < n && j < m {
+        if !want[i].is_empty() && want[i] == said[j] {
+            between(&mut out, (i0, i), (j0, j));
+            out.push(Word {
+                text: script[i].clone(),
+                ..heard[j].clone()
+            });
+            (i, j) = (i + 1, j + 1);
+            (i0, j0) = (i, j);
+        } else if longest[i + 1][j] >= longest[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    between(&mut out, (i0, n), (j0, m));
+    out
 }
 
 /// The stretch of `said` that reads `want` best, as (first token, one past
@@ -613,5 +737,62 @@ mod tests {
         let before = p.clone();
         assert!(p.lay_reading(&[ClipId(9999)], &spans).is_empty());
         assert_eq!(p, before);
+    }
+
+    #[test]
+    fn captions_are_written_as_the_script_has_them() {
+        // Misheard names, no capitals or stops, a word split in two, an aside.
+        let said = heard(
+            "um so welcome to splice the tele prompter roles at your pace well while you record \
+             and stops with the take thanks",
+        );
+        let scripts = [
+            "Welcome to Splice.",
+            "The teleprompter rolls at your pace while you record — easily — and stops with the take.",
+        ];
+        let (words, found) = as_written(&scripts, &said);
+        let text: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(
+            text.join(" "),
+            "um so Welcome to Splice. The teleprompter rolls at your pace well while you record — \
+             and stops with the take. thanks",
+            "the script's words where read; asides and what is outside it as heard; unsaid words left out"
+        );
+        assert_eq!(found, 2);
+        // Times are the heard ones: a match keeps its own, a misheard stretch shares its span.
+        let at = |t: &str| words.iter().find(|w| w.text == t).map(|w| (w.start, w.end)).unwrap();
+        assert_eq!(at("Welcome"), (2 * SECOND, 2 * SECOND + SECOND / 2));
+        let (start, end) = (at("teleprompter").0, at("rolls").1);
+        assert_eq!(
+            (start, end),
+            (6 * SECOND, 8 * SECOND + SECOND / 2),
+            "the misheard words' time"
+        );
+        assert!(
+            words
+                .windows(2)
+                .all(|w| w[0].start <= w[1].start && w[0].start < w[0].end)
+        );
+    }
+
+    #[test]
+    fn captions_stay_as_heard_away_from_the_script() {
+        let said = heard("something else entirely was said here today");
+        let (words, found) = as_written(&["Welcome to Splice, the editor."], &said);
+        assert_eq!((words, found), (said.clone(), 0), "not a reading: untouched");
+        assert_eq!(as_written(&[], &said), (said, 0));
+        // A long departure inside a reading is what was said, not misheard.
+        let said =
+            heard("we ship on fridays every single week because honestly nobody ever stopped us and so do you now");
+        let script = "We ship on Fridays, every single week, rain or shine, and so do you now.";
+        let (words, _) = as_written(&[script], &said);
+        let text = words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            text,
+            "We ship on Fridays, every single week, because honestly nobody ever stopped us and so do you now."
+        );
+        // Writing without spaces is left as heard.
+        let said = heard("今日は 動画を 作ります");
+        assert_eq!(as_written(&["今日は動画を作ります。"], &said).0, said);
     }
 }

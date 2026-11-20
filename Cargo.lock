@@ -5385,7 +5385,7 @@ dependencies = [
 
 [[package]]
 name = "splice-app"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -5409,7 +5409,7 @@ dependencies = [
 
 [[package]]
 name = "splice-core"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "blake3",

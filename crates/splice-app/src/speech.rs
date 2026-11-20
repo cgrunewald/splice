@@ -241,12 +241,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("splice-hear-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let speech = dir.join("speech.aiff");
+        // A named voice: the Mac's default one can be a voice that writes
+        // an empty file. Without it (or without `say`) there is nothing to hear.
         let said = Command::new("say")
-            .arg("-o")
+            .args(["-v", "Samantha", "-o"])
             .arg(&speech)
             .arg("Hello there, this is a test.")
             .status();
-        if !said.is_ok_and(|s| s.success()) {
+        let spoke = std::fs::metadata(&speech).is_ok_and(|m| m.len() > 64 * 1024);
+        if !said.is_ok_and(|s| s.success()) || !spoke {
+            let _ = std::fs::remove_dir_all(dir);
             return;
         }
         let words = transcribe(&speech, 0, 5 * splice_core::time::SECOND).unwrap();

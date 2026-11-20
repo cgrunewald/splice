@@ -474,43 +474,39 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate,
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else { throw Problem("the camera is busy") }
         session.addInput(input)
-        // The largest picture no bigger than 1080p at the frame rate wanted.
-        let fps = Double(config.fps)
-        let fitting = device.formats.filter { f in
-            let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
-            return d.height <= 1080 && d.width <= 1920
-                && f.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= fps - 0.5 }
-        }
-        let best = fitting.max { a, b in
-            let (x, y) = (CMVideoFormatDescriptionGetDimensions(a.formatDescription), CMVideoFormatDescriptionGetDimensions(b.formatDescription))
-            return Int(x.width) * Int(x.height) < Int(y.width) * Int(y.height)
-        }
-        if let best, (try? device.lockForConfiguration()) != nil {
-            device.activeFormat = best
-            // Cameras such as the C920 offer fixed rates like 30.00003 that
-            // refuse a duration of exactly 1/30; use the range's own then.
-            if let range = best.videoSupportedFrameRateRanges.first(where: { $0.maxFrameRate >= fps - 0.5 }) {
-                var frame = range.minFrameDuration
-                if fps < range.maxFrameRate - 0.5 {
-                    let wanted = CMTime(value: 1000, timescale: CMTimeScale(fps * 1000))
-                    frame = CMTimeMaximum(CMTimeMinimum(wanted, range.maxFrameDuration), range.minFrameDuration)
-                }
-                device.activeVideoMinFrameDuration = frame
-                device.activeVideoMaxFrameDuration = frame
-            }
-            device.unlockForConfiguration()
-        }
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange]
         output.alwaysDiscardsLateVideoFrames = true
         output.setSampleBufferDelegate(self, queue: queue)
         guard session.canAddOutput(output) else { throw Problem("the camera cannot be read") }
         session.addOutput(output)
+        // The format and frame rate are set after the output is added, and the
+        // device stays locked until the session runs: otherwise the session
+        // puts back its own preset and the camera's default rate (25 fps on an
+        // Insta360 Link 2, which judders in a 30 fps movie).
+        let fps = Double(config.fps)
+        let mode = cameraMode(device.formats, fps: fps, maxHeight: config.maxHeight)
+        var locked = false
+        if let mode, (try? device.lockForConfiguration()) != nil {
+            locked = true
+            device.activeFormat = mode.format
+            device.activeVideoMinFrameDuration = mode.frame
+            device.activeVideoMaxFrameDuration = mode.frame
+        }
         session.commitConfiguration()
         session.startRunning()
+        if locked { device.unlockForConfiguration() }
         cameraSession = session
         cameraOutput = output
         expected.insert(.camera)
+
+        let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        let running = device.activeVideoMinFrameDuration.isValid && device.activeVideoMinFrameDuration.seconds > 0
+            ? 1 / device.activeVideoMinFrameDuration.seconds : 0
+        event("camera", ["width": Int(size.width), "height": Int(size.height), "fps": (running * 100).rounded() / 100])
+        if running > 0, abs(running - fps) > 0.5 {
+            event("warning", ["message": String(format: "the camera runs at %.0f fps, not the %.0f asked for", running, fps)])
+        }
     }
 
     func startMicrophone(_ id: String) throws {
@@ -786,6 +782,49 @@ func NSScreenScale(containing rect: CGRect) -> CGFloat {
     CGGetDisplaysWithRect(rect, 16, &ids, &count)
     guard count > 0, let mode = CGDisplayCopyDisplayMode(ids[0]) else { return 2 }
     return CGFloat(mode.pixelWidth) / CGFloat(max(1, mode.width))
+}
+
+/// The camera format and frame duration to record with: the frame rate
+/// nearest `fps` the camera offers, then the largest picture no taller than
+/// `maxHeight` (all of them when it is nil) at that rate.
+func cameraMode(_ formats: [AVCaptureDevice.Format], fps: Double, maxHeight: Int?)
+    -> (format: AVCaptureDevice.Format, frame: CMTime)?
+{
+    struct Option {
+        let format: AVCaptureDevice.Format
+        let range: AVFrameRateRange
+        let rate: Double
+        let area: Int
+    }
+    let size = { (f: AVCaptureDevice.Format) in CMVideoFormatDescriptionGetDimensions(f.formatDescription) }
+    var fitting = formats.filter { maxHeight == nil || Int(size($0).height) <= maxHeight! }
+    if fitting.isEmpty {
+        // Every picture is taller than asked: the smallest one.
+        let least = formats.map { Int(size($0).width) * Int(size($0).height) }.min()
+        fitting = formats.filter { Int(size($0).width) * Int(size($0).height) == least }
+    }
+    let options = fitting.flatMap { f in
+        f.videoSupportedFrameRateRanges.map { r in
+            Option(format: f, range: r, rate: min(max(fps, r.minFrameRate), r.maxFrameRate),
+                   area: Int(size(f).width) * Int(size(f).height))
+        }
+    }
+    guard let best = options.min(by: { a, b in
+        let (x, y) = (abs(a.rate - fps), abs(b.rate - fps))
+        if abs(x - y) > 0.01 { return x < y }
+        return a.area > b.area
+    }) else { return nil }
+    // Cameras such as the C920 offer fixed rates like 30.00003 that refuse a
+    // duration of exactly 1/30; use the range's own at its ends.
+    let frame: CMTime
+    if best.rate >= best.range.maxFrameRate - 0.5 {
+        frame = best.range.minFrameDuration
+    } else if best.rate <= best.range.minFrameRate + 0.5 {
+        frame = best.range.maxFrameDuration
+    } else {
+        frame = CMTime(value: 1000, timescale: CMTimeScale(best.rate * 1000))
+    }
+    return (best.format, frame)
 }
 
 /// Seconds since 1970 at host time `t`.

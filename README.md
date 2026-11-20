@@ -331,8 +331,11 @@ yourself and your screen. Nothing extra to install.
 - **Pause** and resume within a take. Clicks are noted, to zoom in on later.
 - **Teleprompter:** switch it on in Record and the story's script shows over
   the scene in big letters, beat by beat, rolling past a reading line at a
-  pace you set (words a minute) while the take records. It is never in the
-  recording. Space rolls and pauses it to rehearse; scroll to move it.
+  pace you set (words a minute: step it, or click the number and type one)
+  while the take records. The word to say now is faintly lit, moving at that
+  pace: longer over long words, with a pause at commas and full stops. It is
+  never in the recording. Space rolls and pauses it to rehearse; scroll to
+  move it.
 - **Cut to the script:** select the take you read and run "Cut the selected
   take to the script" from the command menu (⌘/), or ask your assistant.
   Splice hears the take (whisper.cpp, on this Mac), finds where each beat's

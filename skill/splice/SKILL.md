@@ -431,7 +431,8 @@ splice ctl story cut --clip 11                   # cut the take to the story
   brackets]` is a direction, not said. Each beat is as long as its lines take
   to say at the teleprompter's pace.
 - The person records in the Record tab (the teleprompter rolls with the
-  take, and is never in the recording). The take lands after everything on
+  take at `record prompter --pace WPM`, 60 to 320, faintly lighting the word
+  to say now; it is never in the recording). The take lands after everything on
   the timeline: `record stop --wait` lists its clips.
 - `story match --clip C` hears the take (whisper.cpp, as captions do; C is
   the clip with the voice, the microphone's if there is one) and answers with

@@ -13,6 +13,7 @@ pub mod look;
 pub mod model;
 pub mod motion;
 pub mod score;
+pub mod script;
 pub mod store;
 pub mod story;
 pub mod studio;

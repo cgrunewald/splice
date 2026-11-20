@@ -101,6 +101,12 @@ fn icon(name: &str) -> Option<&'static str> {
             r#"<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><path d="M12 18v2.5"/>"#
         }
         "record" => r#"<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="black"/>"#,
+        // A page of lines: a script.
+        "script" => r#"<rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/>"#,
+        // A clapperboard: a direction for the cut.
+        "direction" => {
+            r#"<rect x="3.5" y="10" width="17" height="10" rx="1.8"/><path d="M3.5 10 5 5.5l15 0-1.5 4.5"/><path d="M9.5 5.5 8 10M14.5 5.5 13 10"/>"#
+        }
         "check" => r#"<path d="m5.5 12.5 4 4 9-9.5"/>"#,
         "close" => r#"<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>"#,
         "minus" => r#"<path d="M5 12h14"/>"#,

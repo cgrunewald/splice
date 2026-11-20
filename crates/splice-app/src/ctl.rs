@@ -159,10 +159,11 @@ Symbols (pieces kept for reuse in any movie: intros, lower thirds, logos)
                                  stretches (default: all of it, evenly)
 
 Story (planning: beats end to end along the timeline, and cues)
-  story read                     beats (id, start, length, title, story, capture, coverage) and cues
+  story read                     beats (id, start, length, title, story, capture, script, directions,
+                                 coverage) and cues
   story list                     the plan as a shot list (plain text, in `text`)
   story add --title T [--duration D] [--after BEAT] [--story TEXT] [--capture TEXT]
-  story set --beat B [--title T] [--story TEXT] [--capture TEXT] [--duration D] [--color C]
+  story set --beat B [--title T] [--story TEXT] [--capture TEXT] [--script TEXT] [--duration D] [--color C]
                                  a new length moves the beats after it, footage and all
   story move --beat B --index I  put a beat at position I (from 0); every beat's footage follows
   story remove --beat B          take a beat out (its footage stays; later beats close up)
@@ -170,6 +171,25 @@ Story (planning: beats end to end along the timeline, and cues)
   story shot add --beat B [--image FILE] [--note TEXT]
                                  a reference shot: what it should look like (a picture, a frame of a video)
   story shot set --shot S --note TEXT  |  story shot move --shot S --index I  |  story shot remove --shot S
+  story script                   the whole script as text: a heading for each beat, its lines, and its
+                                 directions in [square brackets]
+  story script --file F | --text TEXT [--replace]
+                                 a script to read to camera, as beats after those there (--replace: in
+                                 their place; footage stays). A line starting with # begins a beat and
+                                 names it (without any, each paragraph is one); [square brackets] are
+                                 directions, not said. Each beat is as long as its lines take to say.
+                                 The Record tab shows the lines on a teleprompter (`record prompter`)
+  story direction add --beat B --note TEXT
+                                 a note for whoever cuts the beat: zoom in, fade out, hold on the chart
+  story direction set --direction D [--note TEXT] [--done | --undone]  |  story direction remove --direction D
+                                 --done ticks it off once the cut does what it says
+  story match --clip C           hear a take of the script being read and say where each beat's lines
+                                 are in it (timeline seconds, how well they matched, what was heard); a
+                                 line said twice is found where it was last said well. Changes nothing
+  story cut --clip C[,C…]        the same, then cut the take to the story: each beat becomes as long as
+                                 its reading and gets that piece of every layer of the take (name them
+                                 all, or one: the rest are the clips recorded alongside it); the rest of
+                                 the take leaves the timeline. One undo step. Both answer when heard
   story cast --beat B [--add ENTRY] [--remove ENTRY]
                                  who and what from the bible is in a beat
   story brief --beat B [--dir DIR]
@@ -220,7 +240,13 @@ Recording (each source to its own file; the take is laid out as the scene says)
                                  the timeline, into beat B, at T, or only into the media
   record pause | resume
   record stop [--wait]           stop; with --wait, answer once the take is in the project
-  record status                  recording or not, for how long, sound levels, the last take's folder
+  record status                  recording or not, for how long, sound levels, the last take's folder,
+                                 and the teleprompter
+  record prompter [on|off|start|pause|top] [--pace WPM] [--size PT]
+                                 the teleprompter: the script's lines over the Record tab's scene, never
+                                 in the recording. It rolls while a take records (start/pause roll it
+                                 without recording; top goes back to the start). --pace is words a
+                                 minute (150), --size the letters' height in points (40)
 
 Operating the window (as a person would: for checking the interface)
   ui                             window size and scale, mouse, stage, timeline and picture bounds,
@@ -513,7 +539,7 @@ fn build(args: &[String]) -> Result<Value, String> {
                 request.insert(arg[2..].into(), time_value(arg, raw)?);
             }
             "--track" | "--fps" | "--version" | "--beat" | "--cue" | "--index" | "--display" | "--after" | "--shot"
-            | "--take" => {
+            | "--take" | "--direction" | "--pace" => {
                 let n: u64 = next(arg)?.parse().map_err(|_| format!("{arg} expects a number"))?;
                 request.insert(arg[2..].into(), json!(n));
             }
@@ -577,7 +603,7 @@ fn build(args: &[String]) -> Result<Value, String> {
             }
             "--text" | "--label" | "--name" | "--new" | "--as" | "--kind" | "--words" | "--prompt" | "--model"
             | "--mode" | "--tool" | "--refs" | "--job" | "--aspect" | "--layer" | "--into" | "--remove" | "--json"
-            | "--add" | "--title" | "--story" | "--capture" | "--region" | "--note" => {
+            | "--add" | "--title" | "--story" | "--capture" | "--region" | "--note" | "--script" => {
                 request.insert(arg[2..].into(), json!(value(next(arg)?)?));
             }
             "--file" => {
@@ -602,8 +628,11 @@ fn build(args: &[String]) -> Result<Value, String> {
                 request.insert(arg[2..].into(), json!(v));
             }
             "--ripple" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam" | "--drop"
-            | "--plain" => {
+            | "--plain" | "--replace" => {
                 request.insert(arg[2..].into(), json!(true));
+            }
+            "--done" | "--undone" => {
+                request.insert("done".into(), json!(arg == "--done"));
             }
             "--reverse" | "--forwards" => {
                 request.insert("reverse".into(), json!(arg == "--reverse"));
@@ -711,7 +740,10 @@ fn build(args: &[String]) -> Result<Value, String> {
                 |w| w.as_str(),
             );
             request.insert("sub".into(), json!(sub));
-            if let Some(action) = words.get(1).filter(|_| sub == "shot" || sub == "take") {
+            if let Some(action) = words
+                .get(1)
+                .filter(|_| matches!(sub, "shot" | "take" | "direction" | "prompter"))
+            {
                 request.insert("action".into(), json!(action));
             }
             if command == "record" && sub == "adjust" {
@@ -922,6 +954,22 @@ mod tests {
         assert_eq!(
             r,
             json!({"cmd": "bible", "sub": "add", "kind": "character", "name": "Ada", "words": "silver"})
+        );
+        assert_eq!(
+            build(&args("story direction set --direction 9 --note Zoom --done")).unwrap(),
+            json!({"cmd": "story", "sub": "direction", "action": "set", "direction": 9, "note": "Zoom", "done": true})
+        );
+        assert_eq!(
+            build(&args("story set --beat 3 --script Hello")).unwrap(),
+            json!({"cmd": "story", "sub": "set", "beat": 3, "script": "Hello"})
+        );
+        assert_eq!(
+            build(&args("story cut --clip 4,5")).unwrap(),
+            json!({"cmd": "story", "sub": "cut", "clips": [4, 5]})
+        );
+        assert_eq!(
+            build(&args("record prompter start --pace 170 --size 48")).unwrap(),
+            json!({"cmd": "record", "sub": "prompter", "action": "start", "pace": 170, "size": 48.0})
         );
         let r = build(&args("story take pending --beat 3 --model seedance_2_5 --job j1")).unwrap();
         assert_eq!(

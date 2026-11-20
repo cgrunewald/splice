@@ -1,6 +1,6 @@
 ---
 name: splice
-description: Work with the user inside their Splice video editor - see the project they have open, place, move, trim, split and delete clips on the timeline, import media, plan the story as beats and cues, record the screen, camera and microphone, compose music as a score, make animated scenes and diagrams, make and fill reusable symbols (intros, lower thirds with placeholders), look at any frame, export, and take requests they send from the editor. Also covers installing Splice and this skill. Use when the user asks for help editing a video they have open in Splice, says "my edit/timeline/movie/story/score", asks you to listen for requests from Splice, or asks to install or set up Splice.
+description: Work with the user inside their Splice video editor - see the project they have open, place, move, trim, split and delete clips on the timeline, import media, plan the story as beats and cues, load a script to read from the teleprompter and cut the reading to the story, follow the directions left on beats, record the screen, camera and microphone, compose music as a score, make animated scenes and diagrams, make and fill reusable symbols (intros, lower thirds with placeholders), look at any frame, export, and take requests they send from the editor. Also covers installing Splice and this skill. Use when the user asks for help editing a video they have open in Splice, says "my edit/timeline/movie/story/score", asks you to listen for requests from Splice, or asks to install or set up Splice.
 ---
 
 # Working in the user's Splice editor
@@ -403,6 +403,53 @@ splice ctl view story                                  # show the person the boa
 - Then fill the beats with footage (`story fill`, or record). `coverage`
   says which beats still need it.
 
+### A script, read to camera, and directions for the cut
+
+A beat can hold the lines said in it (`script`) and **directions**: notes
+from the person on how to cut it ("zoom in on the chart", "fade out"). The
+Record tab shows the lines on a teleprompter while the person films
+themselves reading; you then cut the reading to the story.
+
+```sh
+splice ctl story script --file talk.md           # a script as beats (after those there; --replace: instead)
+splice ctl story script                          # the whole script back as text
+splice ctl story set --beat 27 --script "You ship on Fridays. So do we."
+splice ctl story direction add --beat 27 --note "Zoom in on the calendar"
+splice ctl story direction set --direction 31 --done     # also --note TEXT, --undone; direction remove
+splice ctl record prompter on --pace 150 --size 40       # also off, start, pause, top
+splice ctl story match --clip 11                 # where each beat's lines are in a take (changes nothing)
+splice ctl story cut --clip 11                   # cut the take to the story
+```
+
+- In a script file a line starting with `#` begins a beat and names it
+  (without any, each paragraph is a beat), and anything in `[square
+  brackets]` is a direction, not said. Each beat is as long as its lines take
+  to say at the teleprompter's pace.
+- The person records in the Record tab (the teleprompter rolls with the
+  take, and is never in the recording). The take lands after everything on
+  the timeline: `record stop --wait` lists its clips.
+- `story match --clip C` hears the take (whisper.cpp, as captions do; C is
+  the clip with the voice, the microphone's if there is one) and answers with
+  a `reading` per beat: `read`, `start`/`end` in timeline seconds, `score`
+  (1 is every word) and what was `heard` beside the `script`. A line said
+  more than once is found where it was last said well.
+- `story cut` does the same and then lays each reading into its beat: the
+  beat becomes as long as the reading and gets that piece of every layer of
+  the take (name one clip and the clips recorded alongside it are cut too,
+  or name them all). False starts, repeats and gaps leave the timeline; a
+  beat not heard stays empty. It is one undo step.
+- Check the cut before you say it is done: read the `readings` (a low
+  `score`, or `heard` that drifts from the `script`, wants a look), play the
+  joins, and fix an edge with `trim` or `story set --duration`. If the
+  person went off script, `match` first and cut by hand (`split`, `story
+  fill`) where it missed.
+- **Then follow the directions.** `story read` lists each beat's
+  `directions`. Do what each says with the editing commands (a zoom is
+  keyframes on scale or `look --drift`, a fade is `--enter/--exit fade` or
+  a `transition`), check it with `frame`, and tick it off with `story
+  direction set --direction D --done`. If one is unclear, ask rather than
+  guess. Leave your own notes for the person the same way (`direction add`).
+
 ### The bible and cast
 
 The bible holds who and what the movie keeps coming back to: characters,
@@ -527,7 +574,8 @@ splice ctl record mic-mode                 # open macOS's Mic Mode menu (Voice I
 splice ctl record setup --codec hevc --quality high --fps 60 --height 1440 --default
 splice ctl record start [--for 20] [--beat 27 | --at 30 | --into media]
 splice ctl record pause | resume
-splice ctl record status                   # recording, seconds, levels, the last take's folder
+splice ctl record status                   # recording, seconds, levels, the last take's folder, the teleprompter
+splice ctl record prompter on              # the story's script over the scene, to read while recording
 splice ctl record stop --wait              # answers once the take is in the project
 ```
 

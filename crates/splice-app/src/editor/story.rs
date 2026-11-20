@@ -30,6 +30,8 @@ pub enum Target {
     Script(BeatId),
     /// A note for the cut.
     Direction(splice_core::story::DirectionId),
+    /// The teleprompter's pace, in words a minute.
+    Pace,
     Cue(CueId),
     Shot(splice_core::story::ShotId),
     /// A bible entry's name, and its continuity words.
@@ -171,6 +173,12 @@ impl Editor {
         let story = &self.doc.project.story;
         let beat = |id: BeatId| story.beats.iter().find(|b| b.id == id);
         Some(match target {
+            // As typed (nothing yet is no pace at all); it is held to what
+            // the teleprompter can do when the typing ends.
+            Target::Pace => match self.studio().prompter.pace {
+                0 => String::new(),
+                pace => pace.to_string(),
+            },
             Target::Title(id) => beat(id)?.title.clone(),
             Target::Story(id) => beat(id)?.story.clone(),
             Target::Capture(id) => beat(id)?.capture.clone(),
@@ -196,8 +204,16 @@ impl Editor {
     }
 
     fn set_text(&mut self, target: Target, text: String) {
+        if target == Target::Pace {
+            let digits: String = text.chars().filter(char::is_ascii_digit).take(3).collect();
+            let mut studio = self.studio();
+            studio.prompter.pace = digits.parse().unwrap_or(0);
+            self.doc.project.studio = Some(studio);
+            return;
+        }
         let p = &mut self.doc.project;
         match target {
+            Target::Pace => {}
             Target::Title(id) => p.set_beat(id, |b| b.title = text),
             Target::Story(id) => p.set_beat(id, |b| b.story = text),
             Target::Capture(id) => p.set_beat(id, |b| b.capture = text),
@@ -242,6 +258,19 @@ impl Editor {
             {
                 self.doc.project.remove_direction(id);
             }
+            // A pace is one the teleprompter can keep; none typed is the one before.
+            if typing.target == Target::Pace
+                && let Some(studio) = self.doc.project.studio.as_mut()
+            {
+                if studio.prompter.pace == 0 {
+                    studio.prompter.pace = typing
+                        .before
+                        .studio
+                        .as_ref()
+                        .map_or(splice_core::script::PACE, |s| s.prompter.pace);
+                }
+                studio.prompter = studio.prompter.clamped();
+            }
             self.doc.commit(typing.before);
             cx.notify();
         }
@@ -285,7 +314,12 @@ impl Editor {
         };
         let one_line = matches!(
             target,
-            Target::Title(_) | Target::Cue(_) | Target::Shot(_) | Target::EntryName(_) | Target::Direction(_)
+            Target::Title(_)
+                | Target::Cue(_)
+                | Target::Shot(_)
+                | Target::EntryName(_)
+                | Target::Direction(_)
+                | Target::Pace
         );
         match k.key.as_str() {
             "escape" => {
@@ -422,7 +456,8 @@ impl Editor {
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     window.prevent_default();
-                    this.begin_typing(target, e.click_count >= 2, window, cx);
+                    // A number is typed over; words are added to.
+                    this.begin_typing(target, e.click_count >= 2 || target == Target::Pace, window, cx);
                 }),
             )
     }
@@ -1198,7 +1233,7 @@ impl Editor {
                 // Lines without a length: as long as they take to say.
                 let said = script
                     .as_deref()
-                    .map(|s| splice_core::script::read_time(s, self.studio().prompter.pace))
+                    .map(|s| splice_core::script::read_time(s, self.studio().prompter.clamped().pace))
                     .filter(|t| *t > 0);
                 let id = self.edit(cx, |p| {
                     let id = p.add_beat(after, &title, duration.or(said).unwrap_or(BEAT_DURATION));

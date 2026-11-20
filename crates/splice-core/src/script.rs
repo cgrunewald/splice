@@ -188,6 +188,80 @@ pub fn place(counts: &[usize], read: f32) -> (usize, f32) {
     (last.unwrap_or(0), if last.is_some() { 1.0 } else { 0.0 })
 }
 
+/// How long a piece of the script takes to say, next to the others: its
+/// letters, a little for being a word at all, and the pause its
+/// punctuation asks for.
+fn weight(piece: &str) -> f32 {
+    let letters = piece.chars().filter(|c| c.is_alphanumeric()).count() as f32;
+    let pause = match piece.trim_end_matches(['"', '\'', ')', '”', '’']).chars().last() {
+        Some('.' | '!' | '?' | '…' | '。' | '！' | '？') => 6.0,
+        Some(',' | ';' | ':' | '—' | '–' | '、' | '，') => 3.0,
+        _ => 0.0,
+    };
+    letters + 2.0 + pause
+}
+
+/// The pieces of `text` read one at a time, as byte ranges: its words, and
+/// writing without spaces two characters at a time.
+fn pieces(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    // The piece being gathered: where it starts, and how many unspaced
+    // characters it holds (None: a spaced word).
+    let mut open: Option<(usize, Option<usize>)> = None;
+    for (i, c) in text.char_indices() {
+        let dense = unspaced(c) && c.is_alphanumeric();
+        let ends = match open {
+            Some((_, Some(n))) => c.is_whitespace() || (dense && n >= 2) || (!dense && !unspaced(c)),
+            Some((_, None)) => c.is_whitespace() || dense,
+            None => false,
+        };
+        if ends && let Some((from, _)) = open.take() {
+            out.push(from..i);
+        }
+        if c.is_whitespace() {
+            continue;
+        }
+        match open.as_mut() {
+            Some((_, Some(n))) if dense => *n += 1,
+            Some(_) => {}
+            None => open = Some((i, dense.then_some(1))),
+        }
+    }
+    if let Some((from, _)) = open {
+        out.push(from..text.len());
+    }
+    // A mark standing alone ("—") is read with the word before it.
+    let mut joined: Vec<std::ops::Range<usize>> = Vec::new();
+    for piece in out {
+        match joined.last_mut() {
+            Some(last) if !text[piece.clone()].chars().any(char::is_alphanumeric) => last.end = piece.end,
+            _ => joined.push(piece),
+        }
+    }
+    joined
+}
+
+/// The word being said `through` (0 to 1) of the way into `text`, as a byte
+/// range: long words and the pauses after commas and full stops take their
+/// share of the time, so it keeps a reader's pace rather than a metronome's.
+/// None when there is nothing to say, or it has all been said.
+pub fn saying(text: &str, through: f32) -> Option<std::ops::Range<usize>> {
+    if !(0.0..1.0).contains(&through) {
+        return None;
+    }
+    let pieces = pieces(text);
+    let weights: Vec<f32> = pieces.iter().map(|p| weight(&text[p.clone()])).collect();
+    let at = through * weights.iter().sum::<f32>();
+    let mut before = 0.0;
+    for (piece, w) in pieces.iter().zip(&weights) {
+        before += w;
+        if at < before {
+            return Some(piece.clone());
+        }
+    }
+    pieces.last().cloned()
+}
+
 /// Where a beat's lines were read in a recording.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reading {
@@ -794,5 +868,41 @@ mod tests {
         // Writing without spaces is left as heard.
         let said = heard("今日は 動画を 作ります");
         assert_eq!(as_written(&["今日は動画を作ります。"], &said).0, said);
+    }
+
+    #[test]
+    fn the_word_being_said_keeps_a_readers_pace() {
+        let text = "Hi, extraordinarily long words. Go";
+        let word = |through: f32| saying(text, through).map(|r| &text[r]);
+        assert_eq!(word(0.0), Some("Hi,"));
+        assert_eq!(word(0.999), Some("Go"));
+        assert_eq!(word(1.0), None, "all said");
+        assert_eq!(saying("", 0.0), None);
+        assert_eq!(saying(" [ ] ", 0.5).map(|r| &" [ ] "[r]), Some("[ ]"));
+        // Every word in order, each for its share: the long word longest,
+        // and a pause after the comma and the full stop.
+        let mut seen: Vec<(&str, u32)> = Vec::new();
+        for step in 0..1000 {
+            let now = word(step as f32 / 1000.0).unwrap();
+            match seen.last_mut() {
+                Some((last, n)) if *last == now => *n += 1,
+                _ => seen.push((now, 1)),
+            }
+        }
+        let order: Vec<&str> = seen.iter().map(|(w, _)| *w).collect();
+        assert_eq!(order, ["Hi,", "extraordinarily", "long", "words.", "Go"]);
+        let held = |w: &str| seen.iter().find(|(s, _)| *s == w).unwrap().1;
+        assert!(held("extraordinarily") > 2 * held("long"), "{seen:?}");
+        assert!(held("Hi,") > held("Go"), "the comma's pause: {seen:?}");
+        assert!(
+            held("words.") > held("long") + held("Go"),
+            "the full stop's pause: {seen:?}"
+        );
+        // A dash alone goes with the word before; unspaced writing two characters at a time.
+        let dashed = "record — easily";
+        assert_eq!(saying(dashed, 0.0).map(|r| &dashed[r]), Some("record —"));
+        let dense = "今日は動画 ok";
+        let all: Vec<&str> = pieces(dense).into_iter().map(|r| &dense[r]).collect();
+        assert_eq!(all, ["今日", "は動", "画", "ok"]);
     }
 }

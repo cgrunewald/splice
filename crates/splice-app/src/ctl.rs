@@ -248,7 +248,8 @@ Recording (each source to its own file; the take is laid out as the scene says)
                                  the teleprompter: the script's lines over the Record tab's scene, never
                                  in the recording. It rolls while a take records (start/pause roll it
                                  without recording; top goes back to the start). --pace is words a
-                                 minute (150), --size the letters' height in points (40)
+                                 minute (150, from 60 to 320): the word to say now is lit as it rolls.
+                                 --size is the letters' height in points (40)
 
 Operating the window (as a person would: for checking the interface)
   ui                             window size and scale, mouse, stage, timeline and picture bounds,

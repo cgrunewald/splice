@@ -520,13 +520,26 @@ impl Editor {
                             .text_color(rgb(beat.color))
                             .child(format!("{}  {}", n + 1, beat.title.to_uppercase())),
                     )
-                    .child(
+                    .child({
+                        // The word being said, lit faintly: it moves at the
+                        // pace, slower over long words and pauses.
+                        let lines = beat.script.trim().to_string();
+                        let said = (i == now).then(|| script::saying(&lines, through)).flatten();
+                        let lit = said.map(|word| {
+                            (
+                                word,
+                                gpui::HighlightStyle {
+                                    background_color: Some(gpui::rgba(0xffffff24).into()),
+                                    ..Default::default()
+                                },
+                            )
+                        });
                         div()
                             .text_size(px(size))
                             .line_height(px(size * 1.4))
                             .text_color(gpui::white())
-                            .child(beat.script.trim().to_string()),
-                    )
+                            .child(gpui::StyledText::new(lines).with_highlights(lit))
+                    })
                     .into_any_element()
             })
             .collect();
@@ -718,7 +731,20 @@ impl Editor {
                         .child(nudge("pace-less", "minus").on_click(
                             cx.listener(|this, _, _, cx| this.set_prompter(cx, |p| p.pace = p.pace.saturating_sub(10))),
                         ))
-                        .child(value(format!("{} wpm", prompter.pace)))
+                        .child(
+                            div()
+                                .w(px(68.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(4.0))
+                                .font_family(MONO_FONT)
+                                .child(
+                                    self.field(Target::Pace, "150", 11.0, cx)
+                                        .tooltip(tip("Words a minute: click to type a pace (60 to 320)", None)),
+                                )
+                                .child(div().text_size(px(11.0)).text_color(Theme::overlay()).child("wpm")),
+                        )
                         .child(
                             nudge("pace-more", "plus")
                                 .on_click(cx.listener(|this, _, _, cx| this.set_prompter(cx, |p| p.pace += 10))),

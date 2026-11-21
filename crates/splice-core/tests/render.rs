@@ -633,7 +633,11 @@ fn cuts_between_frames_leave_no_frame_empty() {
     p.trim_end(second, later);
     let third = p.insert_clip(b, 0, later).unwrap();
     p.trim_end(third, end);
-    assert_eq!(p.tracks[0].clips.len(), 3, "all on one track");
+    // And a gap shorter than a frame, with a frame's time inside it.
+    let (gap, last) = (4_510_000, 5 * SECOND);
+    let fourth = p.insert_clip(b, 0, gap).unwrap();
+    p.trim_end(fourth, last);
+    assert_eq!(p.tracks[0].clips.len(), 4, "all on one track");
     let out = render(&p, &dir, "cuts");
     let frames = every_frame(&out);
     let opens = (start as f64 / SECOND as f64 * fps).ceil() as usize;

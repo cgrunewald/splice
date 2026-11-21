@@ -270,8 +270,28 @@ fn build(
                 .then(|| project.drawn(clip, track_index))
                 .flatten()
                 .filter(|d| still_at.is_none_or(|t| t >= d.from && t < d.to))
-                // A movie draws it on the frames it covers.
-                .and_then(|d| if still_at.is_some() { Some(d) } else { on_frames(d, fps) });
+                // A movie draws it on the frames it covers. A gap shorter
+                // than a frame after the clip before it is no gap: this one
+                // is drawn from where that one ends, so a frame that falls
+                // in the gap is not left empty.
+                .and_then(|mut d| {
+                    if still_at.is_some() {
+                        return Some(d);
+                    }
+                    let before = track
+                        .clips
+                        .iter()
+                        .filter(|c| c.end() <= clip.start && project.source(c).is_some_and(|s| s.is_visual()))
+                        .map(Clip::end)
+                        .max();
+                    if let Some(end) = before
+                        && d.from == clip.start
+                        && clip.start - end < frame
+                    {
+                        d.from = end;
+                    }
+                    on_frames(d, fps)
+                });
             let audio_media = match source {
                 Source::Media(m) if m.has_audio => Some(m),
                 _ => None,

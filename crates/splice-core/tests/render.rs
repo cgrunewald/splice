@@ -602,3 +602,47 @@ fn effects_reach_the_file() {
 fn brightness_at(path: &Path, t: f64, crop: &str) -> f64 {
     measure_crop(path, t, crop).0
 }
+
+/// How bright each frame of a movie is, first to last.
+fn every_frame(path: &Path) -> Vec<f64> {
+    let out = Command::new(tool("ffmpeg").unwrap())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args(["-vf", "scale=16:9", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+        .output()
+        .unwrap();
+    out.stdout
+        .chunks(16 * 9)
+        .map(|f| f.iter().map(|&v| v as f64).sum::<f64>() / f.len() as f64)
+        .collect()
+}
+
+#[test]
+fn cuts_between_frames_leave_no_frame_empty() {
+    let dir = scratch("cuts");
+    let blue = needs_ffmpeg!(dir, "blue", true);
+    let mut p = project();
+    let fps = p.settings.fps as f64;
+    let b = p.add_media(blue);
+    // Three clips end to end on one track. The first starts between two
+    // frames, and the cut after the second lies between two frames.
+    let (start, cut, later, end) = (360_000, 2 * SECOND, 3_210_000, 4_500_000);
+    let first = p.insert_clip(b, 0, start).unwrap();
+    p.trim_end(first, cut);
+    let second = p.insert_clip(b, 0, cut).unwrap();
+    p.trim_end(second, later);
+    let third = p.insert_clip(b, 0, later).unwrap();
+    p.trim_end(third, end);
+    assert_eq!(p.tracks[0].clips.len(), 3, "all on one track");
+    let out = render(&p, &dir, "cuts");
+    let frames = every_frame(&out);
+    let opens = (start as f64 / SECOND as f64 * fps).ceil() as usize;
+    assert!(
+        frames.len() >= (end as f64 / SECOND as f64 * fps) as usize,
+        "{}",
+        frames.len()
+    );
+    for (n, level) in frames.iter().enumerate() {
+        assert_eq!(*level > 30.0, n >= opens, "frame {n} measures {level}: {frames:?}");
+    }
+}

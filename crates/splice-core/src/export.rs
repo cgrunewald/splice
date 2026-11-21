@@ -9,7 +9,7 @@
 
 use crate::look::MotionKind;
 use crate::model::{Clip, Generator, Media, MediaKind, Project, Source};
-use crate::time::{SECOND, Time, secs};
+use crate::time::{SECOND, Time, frame_from, frame_time, secs};
 use std::path::{Path, PathBuf};
 
 /// Overlapping loud clips are held under full scale instead of clipping: a
@@ -269,7 +269,9 @@ fn build(
             let drawn = (!track.hidden)
                 .then(|| project.drawn(clip, track_index))
                 .flatten()
-                .filter(|d| still_at.is_none_or(|t| t >= d.from && t < d.to));
+                .filter(|d| still_at.is_none_or(|t| t >= d.from && t < d.to))
+                // A movie draws it on the frames it covers.
+                .and_then(|d| if still_at.is_some() { Some(d) } else { on_frames(d, fps) });
             let audio_media = match source {
                 Source::Media(m) if m.has_audio => Some(m),
                 _ => None,
@@ -326,6 +328,7 @@ fn build(
                     match still_at {
                         Some(t) => fmt(t - clip.start),
                         None if head > 0.0 => format!("({frame}/{fps}-{head:.6})"),
+                        None if head < 0.0 => format!("({frame}/{fps}+{:.6})", -head),
                         None => format!("({frame}/{fps})"),
                     }
                 };
@@ -366,16 +369,21 @@ fn build(
                             fps,
                             &format!("{tag}b"),
                         );
-                        let placed = fmt(if still_at.is_some() { 0 } else { drawn.from });
+                        let (placed, end) = if still_at.is_some() {
+                            (0, frame)
+                        } else {
+                            (drawn.from, drawn.to)
+                        };
                         chain.push(format!(
-                            "format={},setpts=PTS-STARTPTS+{placed}/TB",
-                            if layer { "rgba" } else { "yuva420p" }
+                            "format={},setpts=PTS-STARTPTS+{}/TB",
+                            if layer { "rgba" } else { "yuva420p" },
+                            onto(placed, fps)
                         ));
                         filters.push(format!("[{frames}b]{}[b{tag}]", chain.join(",")));
-                        let end = fmt(if still_at.is_some() { frame } else { drawn.to });
                         filters.push(format!(
-                            "[{picture}][b{tag}]overlay=x=0:y=0:{}eof_action=pass:enable='between(t,{placed},{end})'[pb{tag}]",
-                            if layer { "format=auto:" } else { "" }
+                            "[{picture}][b{tag}]overlay=x=0:y=0:{}eof_action=pass:enable='{}'[pb{tag}]",
+                            if layer { "format=auto:" } else { "" },
+                            shown(placed, end, fps)
                         ));
                         picture = format!("pb{tag}");
                         format!("{frames}m")
@@ -486,7 +494,7 @@ fn build(
                         }
                         opacity(&mut chain, &mut prepare, drawn, pose, still_at, fps, &tag);
                         let placed_at = if still_at.is_some() { 0 } else { drawn.from };
-                        let start = fmt(placed_at);
+                        let start = onto(placed_at, fps);
                         let constant = match still_at {
                             Some(t) => Some(pose.at(secs(t - clip.start)).scale),
                             None => pose.scale.constant(),
@@ -538,11 +546,12 @@ fn build(
                                 )
                             }
                         };
-                        let end = fmt(if still_at.is_some() { frame } else { drawn.to });
+                        let end = if still_at.is_some() { frame } else { drawn.to };
                         filters.push(format!(
                             "[{picture}][v{tag}]overlay=x='{x}':y='{y}':{}eof_action=pass:\
-                             enable='between(t,{start},{end})'[p{tag}]",
-                            if layer { "format=auto:" } else { "" }
+                             enable='{}'[p{tag}]",
+                            if layer { "format=auto:" } else { "" },
+                            shown(placed_at, end, fps)
                         ));
                         picture = format!("p{tag}");
                         continue;
@@ -657,7 +666,7 @@ fn build(
                         ));
                     }
                     let placed_at = if still_at.is_some() { 0 } else { drawn.from };
-                    let start = fmt(placed_at);
+                    let start = onto(placed_at, fps);
                     // Over a see-through canvas the overlay negotiates its format
                     // from its inputs: a picture that changes size frame to frame
                     // only stays right as RGBA (as yuva420p it froze at its first size).
@@ -667,7 +676,7 @@ fn build(
                     ));
                     filters.push(format!("[{frames}]{}[v{tag}]", chain.join(",")));
 
-                    let end = fmt(if still_at.is_some() { frame } else { drawn.to });
+                    let end = if still_at.is_some() { frame } else { drawn.to };
                     // A cropped picture's remains stay where they were, scaled with it.
                     let (x, y) = if moving {
                         // Already placed in its frame.
@@ -688,9 +697,10 @@ fn build(
                     };
                     filters.push(format!(
                         "[{picture}][v{tag}]overlay=x='{x}':y='{y}':{}eof_action=pass:\
-                     enable='between(t,{start},{end})'[p{tag}]",
+                     enable='{}'[p{tag}]",
                         // Over a see-through canvas, keep what is see-through.
-                        if layer { "format=auto:" } else { "" }
+                        if layer { "format=auto:" } else { "" },
+                        shown(placed_at, end, fps)
                     ));
                     picture = format!("p{tag}");
                 }
@@ -727,6 +737,16 @@ fn build(
                 .then(|| project.dip_into(clip, track_index))
                 .flatten()
                 .filter(|d| still_at.is_none_or(|t| t >= d.from && t < d.to))
+                .and_then(|mut d| {
+                    if still_at.is_none() {
+                        let (a, z) = (frame_from(d.from, fps), frame_from(d.to, fps));
+                        (d.from, d.to) = (frame_time(a, fps), frame_time(z, fps));
+                        if z <= a {
+                            return None;
+                        }
+                    }
+                    Some(d)
+                })
             {
                 let len = if still_at.is_some() { frame } else { dip.to - dip.from };
                 args.extend(strings(&[
@@ -750,14 +770,13 @@ fn build(
                 chain.push(format!(
                     "format={},setpts=PTS-STARTPTS+{}/TB",
                     if layer { "rgba" } else { "yuva420p" },
-                    fmt(placed)
+                    onto(placed, fps)
                 ));
                 filters.push(format!("[{i}:v]{}[d{tag}]", chain.join(",")));
                 filters.push(format!(
-                    "[{picture}][d{tag}]overlay=x=0:y=0:{}eof_action=pass:enable='between(t,{},{})'[q{tag}]",
+                    "[{picture}][d{tag}]overlay=x=0:y=0:{}eof_action=pass:enable='{}'[q{tag}]",
                     if layer { "format=auto:" } else { "" },
-                    fmt(placed),
-                    fmt(placed + len)
+                    shown(placed, placed + len, fps)
                 ));
                 picture = format!("q{tag}");
             }
@@ -906,6 +925,39 @@ fn scratch_dir() -> PathBuf {
     ))
 }
 
+/// A clip drawn on whole frames: frame `n` of the movie is the picture at
+/// `n / fps`, so a clip shows from the first frame at or after it starts to
+/// the last one before it ends. Its stretch is moved onto those frames (its
+/// pictures then start a little into it, where that frame is). `None` when
+/// no frame falls inside it.
+///
+/// Left as it lay, a clip starting between two frames lost its last frame:
+/// ffmpeg places a stream on the frame before, and it ran out a frame early.
+fn on_frames(mut drawn: crate::compose::Drawn, fps: u32) -> Option<crate::compose::Drawn> {
+    let (first, end) = (frame_from(drawn.from, fps), frame_from(drawn.to, fps));
+    if end <= first {
+        return None;
+    }
+    (drawn.from, drawn.to) = (frame_time(first, fps), frame_time(end, fps));
+    Some(drawn)
+}
+
+/// Where a stream that starts at `t` (on a frame) goes, for `setpts`, in
+/// seconds. ffmpeg cuts the result down to a whole frame, so it is written
+/// as half a frame past the one meant: a time in decimals can fall just
+/// short of its frame and land on the one before.
+fn onto(t: Time, fps: u32) -> String {
+    format!("{}.5/{fps}", (t as f64 * fps as f64 / SECOND as f64).round() as i64)
+}
+
+/// The `enable` that shows a layer from the frame at `from` up to, not
+/// including, the frame at `to`: its edges lie half a frame before each, so
+/// no rounding of a time puts a frame on the wrong side.
+fn shown(from: Time, to: Time, fps: u32) -> String {
+    let edge = |t: Time| ((t as f64 * fps as f64 / SECOND as f64).round() - 0.5) / fps as f64;
+    format!("between(t,{:.6},{:.6})", edge(from), edge(to))
+}
+
 /// The clear margin around a moving picture, in pixels each side.
 const BORDER: u32 = 2;
 
@@ -945,7 +997,7 @@ fn opacity(
                 }
                 let fd = secs(motion.duration.min(clip.duration));
                 let head = secs(drawn.head());
-                let st = if inward { head } else { head + secs(clip.duration) - fd };
+                let st = if inward { head } else { head + secs(clip.duration) - fd }.max(0.0);
                 chain.push(format!(
                     "fade=t={}:st={st:.6}:d={fd:.6}:alpha=1",
                     if inward { "in" } else { "out" }
@@ -963,7 +1015,8 @@ fn opacity(
                 let at = n as f64 / fps as f64;
                 let v = format!("{:.4}", pose.opacity.eval(at - head).clamp(0.0, 1.0));
                 if said.as_ref() != Some(&v) {
-                    commands.push(format!("{at:.6} {name} aa {v}"));
+                    // Half a frame early, so the frame it is for hears it.
+                    commands.push(format!("{:.6} {name} aa {v}", (at - 0.5 / fps as f64).max(0.0)));
                     said = Some(v);
                 }
             }

@@ -1078,7 +1078,8 @@ impl Editor {
                         d.child(
                             div().flex().child(
                                 self.chip("captions", "Add captions from speech", false, cx, move |this, cx| {
-                                    if let Err(e) = this.caption_clip(id, Default::default(), false, None, cx) {
+                                    if let Err(e) = this.caption_clips(&[id], None, Default::default(), false, None, cx)
+                                    {
                                         this.say_error(e);
                                     }
                                 })

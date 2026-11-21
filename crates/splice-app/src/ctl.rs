@@ -52,6 +52,10 @@ Titles, colours and looks
           --animate fade|rise|pop|type|karaoke|none [--by word|letter|line] [--over S]
                 (words come in one at a time, spread over S seconds, or as captions' words are said)
   look:   --x F --y F (centre offset, fractions of the canvas)  --scale F (1 = natural)  --opacity F
+          --anchor left|right|top|bottom|center|top-left|…   (--x/--y place that edge or corner, not
+                the centre: `--x -0.45 --anchor left` keeps a label's left edge there whatever it says.
+                With `style`, that edge stays put when new words change the title's size. Replies to
+                text, style and look give the clip's `bounds`: left, right, top, bottom, width, height)
           --enter KIND [--enter-for S]  --exit KIND [--exit-for S]
               KIND: none, fade, slide-up, slide-down, slide-left, slide-right, zoom, pop
           --drift none|zoom-in|zoom-out (a slow zoom across the clip)
@@ -511,9 +515,9 @@ fn build(args: &[String]) -> Result<Value, String> {
     while let Some(arg) = rest.next() {
         let mut next = |name: &str| rest.next().ok_or(format!("{name} needs a value"));
         match arg.as_str() {
-            "--font" | "--color" | "--box" | "--align" | "--enter" | "--exit" | "--drift" | "--key" | "--mask"
-            | "--query" | "--crop" | "--grade" | "--ease" | "--prop" | "--backdrop" | "--redact" | "--letterbox"
-            | "--animate" | "--by" => {
+            "--font" | "--color" | "--box" | "--align" | "--anchor" | "--enter" | "--exit" | "--drift" | "--key"
+            | "--mask" | "--query" | "--crop" | "--grade" | "--ease" | "--prop" | "--backdrop" | "--redact"
+            | "--letterbox" | "--animate" | "--by" => {
                 request.insert(arg[2..].into(), json!(value(next(arg)?)?));
             }
             "--size" | "--x" | "--y" | "--scale" | "--opacity" | "--similarity" | "--blend" | "--feather"

@@ -131,6 +131,15 @@ splice ctl look --all --grade teal-orange                          # every video
 - `--x`/`--y` move a picture's centre by fractions of the canvas (0 is
   centred, +0.5 is the right/bottom edge); `--scale` 1 is its natural size
   (media fitted to the canvas, a title as set).
+- `--anchor left|right|top|bottom|center` (or a corner: `top-left`,
+  `bottom-right`) makes `--x`/`--y` place that edge or corner instead of the
+  centre. Use it for labels of varying length: `text --text "…" --x -0.45
+  --y 0.4 --anchor bottom-left` starts every label at the same place, however
+  long. `style --clip C --text "…" --anchor left` changes the words and
+  keeps the left edge where it is. Replies to `text`, `style` and `look`
+  give the clip's `bounds` (left, right, top, bottom, width, height, in the
+  units of `--x`/`--y`), so you can check it is inside ±0.5 or lay the next
+  thing out beside it.
 - Animations: `--enter`/`--exit` take none, fade, slide-up, slide-down,
   slide-left, slide-right, zoom or pop (all but none also fade);
   `--enter-for` is seconds. `--drift zoom-in|zoom-out` zooms slowly across

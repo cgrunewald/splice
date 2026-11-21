@@ -263,8 +263,20 @@ impl Editor {
                     Ok(None) => self.doc.project.tracks.get(track).map_or(0, |t| t.end()),
                     Err(e) => return Some(fail(e)),
                 };
+                let lengths = self.lengths();
+                let whole = self
+                    .doc
+                    .project
+                    .media(media)
+                    .filter(|m| m.is_timed())
+                    .map(|m| m.duration);
                 match self.edit(cx, |p| p.insert_clip(media, track, at)) {
-                    Some(clip) => self.edited_with(json!({ "clip": self.clip_json(clip) })),
+                    Some(clip) => {
+                        let mut reply = json!({ "clip": self.clip_json(clip) });
+                        let was = lengths.into_iter().chain(whole.map(|d| (clip, d))).collect::<Vec<_>>();
+                        self.say_how_placed(&mut reply, &was, &[(clip, track)]);
+                        self.edited_with(reply)
+                    }
                     None => fail("that media has nothing to place"),
                 }
             }
@@ -281,9 +293,17 @@ impl Editor {
                     Err(e) => return Some(fail(e)),
                 };
                 let dtrack = self.track(request).map_or(0, |t| t as isize - first.track as isize);
+                let lengths = self.lengths();
+                let asked: Vec<(ClipId, usize)> = ids
+                    .iter()
+                    .filter_map(|id| Some((*id, self.doc.project.slot(*id)?.track)))
+                    .map(|(id, t)| (id, (t as isize + dtrack).max(0) as usize))
+                    .collect();
                 self.edit(cx, |p| p.move_clips(&ids, dt, dtrack));
                 let clips: Vec<Value> = ids.iter().map(|id| self.clip_json(*id)).collect();
-                self.edited_with(json!({ "clips": clips }))
+                let mut reply = json!({ "clips": clips });
+                self.say_how_placed(&mut reply, &lengths, &asked);
+                self.edited_with(reply)
             }
             "trim" => {
                 let ids = match self.clips(request) {
@@ -912,6 +932,48 @@ impl Editor {
     }
 
     /// A clip as `ctl` shows it: times in seconds, its track counted from 1.
+    /// How long every clip is, to tell afterwards which an edit cut short.
+    fn lengths(&self) -> Vec<(ClipId, Time)> {
+        self.doc.project.clips().map(|(_, c)| (c.id, c.duration)).collect()
+    }
+
+    /// Adds to a reply what placing clips did besides putting them where
+    /// asked: `trimmed`, the clips cut to meet a neighbour they overlapped
+    /// by a frame or less (`was` is how long each was, or would have been),
+    /// and `rose`, the clips that found their track (`asked`) taken and went
+    /// up to another, where they cover the layers between.
+    fn say_how_placed(&self, reply: &mut Value, was: &[(ClipId, Time)], asked: &[(ClipId, usize)]) {
+        let project = &self.doc.project;
+        let trimmed: Vec<Value> = was
+            .iter()
+            .filter_map(|(id, was)| {
+                let clip = project.clip(*id)?;
+                (clip.duration < *was)
+                    .then(|| json!({ "clip": id.0, "by": s(was - clip.duration), "end": s(clip.end()) }))
+            })
+            .collect();
+        let rose: Vec<Value> = asked
+            .iter()
+            .filter_map(|(id, asked)| {
+                let track = project.slot(*id)?.track;
+                (track > *asked && *asked < project.tracks.len())
+                    .then(|| json!({ "clip": id.0, "asked": asked + 1, "track": track + 1 }))
+            })
+            .collect();
+        let mut notes = Vec::new();
+        if !trimmed.is_empty() {
+            notes.push("a clip overlapped its neighbour by a frame or less: the earlier one now ends at the cut");
+            reply["trimmed"] = json!(trimmed);
+        }
+        if !rose.is_empty() {
+            notes.push("the track asked for was taken there: the clip is on a track above, over the layers between");
+            reply["rose"] = json!(rose);
+        }
+        if !notes.is_empty() {
+            reply["note"] = json!(notes.join("; "));
+        }
+    }
+
     pub(super) fn clip_json(&self, id: ClipId) -> Value {
         let project = &self.doc.project;
         let (Some(slot), Some(clip)) = (project.slot(id), project.clip(id)) else {

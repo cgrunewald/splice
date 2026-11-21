@@ -27,6 +27,10 @@ Media
 Editing (each is one undo step; clips and media are named by id, media also by name)
   add --media M [--at T] [--track N]       put media on the timeline (default: the end of track N)
   move --clip C [--to T] [--track N]       move a clip in time or to another layer
+                                 (add, move: a clip a frame or less over its neighbour on the track
+                                 meets it, the earlier one cut to end there: `trimmed` in the reply.
+                                 Over it by more, it goes to the first free track above, where it
+                                 covers the layers between: `rose` in the reply)
   trim --clip C [--start T] [--end T]      move a clip's left or right edge to T
   split [--at T] [--clip C]                cut at T (default: the playhead) every clip under it, or C
   delete --clip C [--ripple]               remove clips; --ripple closes the gap

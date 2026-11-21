@@ -389,6 +389,7 @@ the story carries the footage along.
 splice ctl story read                                  # beats with ids, times, coverage, clips; cues
 splice ctl story add --title "Hook" --duration 4 --story "Why care" --capture "Close on the app"
 splice ctl story set --beat 27 --duration 6 --capture "Screen: open the inspector"
+splice ctl story set --beat 27 --duration 6 --board-only   # the plan alone; no clip moves
 splice ctl story move --beat 29 --index 0              # its footage, and everyone's, follows
 splice ctl story fill --beat 27 --media intro.mov      # lay media in at the beat's start, trimmed to fit
 splice ctl story remove --beat 28                      # footage stays where it is
@@ -400,6 +401,12 @@ splice ctl cue add --at 9 --label "music lifts"
 splice ctl view story                                  # show the person the board
 ```
 
+- A new `--duration` moves every clip that starts at or after the beat's old
+  end, on all tracks, by the same amount, so layers stay in step; the reply
+  lists them in `moved` with the `shift` in seconds. A clip that runs on
+  past the beat's end (music under the whole video) stays. On a finished
+  edit whose plan has gone stale, use `--board-only`: it changes the plan
+  and moves nothing.
 - Draft the story with the person before cutting: a few beats, each with what
   happens and what to capture. Fit durations to the music or voice-over.
 - Give each beat reference shots: a picture (any image, or a frame of a

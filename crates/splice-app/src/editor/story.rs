@@ -1262,6 +1262,8 @@ impl Editor {
                     Err(e) => return fail(e),
                 };
                 let (title, story, capture, script) = (text("title"), text("story"), text("capture"), text("script"));
+                let board_only = request.get("board-only").and_then(Value::as_bool).unwrap_or(false);
+                let mut moved = None;
                 self.typing = None;
                 self.edit(cx, |p| {
                     p.set_beat(id, |b| {
@@ -1281,11 +1283,27 @@ impl Editor {
                             b.color = c;
                         }
                     });
-                    if let Some(d) = duration {
-                        p.set_beat_duration(id, d);
+                    match duration {
+                        Some(d) if board_only => p.plan_beat_duration(id, d),
+                        Some(d) => moved = Some(p.set_beat_duration(id, d)),
+                        None => {}
                     }
                 });
-                done(self, json!({ "beat": id.0 }))
+                let mut reply = json!({ "beat": id.0 });
+                // What a new length did to the timeline, so it is never a surprise.
+                if duration.is_some() {
+                    let moved = moved.unwrap_or_default();
+                    reply["moved"] = json!(moved.clips.iter().map(|c| c.0).collect::<Vec<_>>());
+                    reply["shift"] = json!(secs(moved.by));
+                    if moved.by != moved.asked {
+                        reply["short_by"] = json!(secs((moved.asked - moved.by).abs()));
+                        reply["note"] = json!(
+                            "later footage closed up as far as the footage before it allows; \
+                             the beats after this one now start before their footage"
+                        );
+                    }
+                }
+                done(self, reply)
             }
             ("story", "move") => {
                 let id = match beat(self) {

@@ -178,6 +178,18 @@ pub enum Coverage {
     Full,
 }
 
+/// What a change to a beat's length moved on the timeline.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rippled {
+    /// The clips that moved, each on its own track.
+    pub clips: Vec<ClipId>,
+    /// How far they moved (later is positive).
+    pub by: Time,
+    /// How far the beats after it moved. More than `by` when footage that
+    /// stays was in the way.
+    pub asked: Time,
+}
+
 impl Story {
     pub fn is_empty(&self) -> bool {
         self.beats.is_empty() && self.cues.is_empty()
@@ -306,16 +318,60 @@ impl Project {
     }
 
     /// Changes a beat's length. The beats after it, and their footage, move
-    /// to keep the story end to end.
-    pub fn set_beat_duration(&mut self, id: BeatId, duration: Time) {
-        let Some((_, end)) = self.story.span(id) else { return };
+    /// to keep the story end to end: every clip starting at or after the
+    /// beat's old end moves by the same amount, on its own track, so what
+    /// was in step stays in step. Says what moved.
+    ///
+    /// Moving earlier, they stop where the first of them meets footage that
+    /// stays (the beat's own, or a clip that runs on past the beat's end)
+    /// rather than rise to other tracks; `Rippled::by` is then short of
+    /// `Rippled::asked`.
+    pub fn set_beat_duration(&mut self, id: BeatId, duration: Time) -> Rippled {
+        let Some((_, end)) = self.story.span(id) else {
+            return Rippled::default();
+        };
         let duration = duration.max(self.frame());
         let i = self.story.index(id).expect("found above");
-        let by = duration - self.story.beats[i].duration;
+        let asked = duration - self.story.beats[i].duration;
         // Footage of this beat stays; footage after it moves.
         let own = self.beat_clips(id);
         self.story.beats[i].duration = duration;
-        self.shift_clips_from(end, by, &own);
+        let moving = |c: &Clip| c.start >= end && !own.contains(&c.id);
+        // How far earlier they can go: to zero, or to the footage before them.
+        let room = self
+            .tracks
+            .iter()
+            .filter_map(|t| {
+                let first = t.clips.iter().filter(|c| moving(c)).map(|c| c.start).min()?;
+                let before = t
+                    .clips
+                    .iter()
+                    .filter(|c| !moving(c) && c.start < first)
+                    .map(Clip::end)
+                    .max();
+                Some(first - before.unwrap_or(0).min(first))
+            })
+            .min()
+            .unwrap_or(0);
+        let by = asked.max(-room);
+        let mut clips = Vec::new();
+        if by != 0 {
+            for track in &mut self.tracks {
+                for clip in track.clips.iter_mut().filter(|c| moving(c)) {
+                    clip.start += by;
+                    clips.push(clip.id);
+                }
+                track.clips.sort_by_key(|c| c.start);
+            }
+        }
+        Rippled { clips, by, asked }
+    }
+
+    /// Changes a beat's planned length and nothing on the timeline: for a
+    /// plan that has fallen behind an edit made by hand.
+    pub fn plan_beat_duration(&mut self, id: BeatId, duration: Time) {
+        let frame = self.frame();
+        self.set_beat(id, |b| b.duration = duration.max(frame));
     }
 
     /// Puts a beat at position `to` in the story, carrying every beat's
@@ -822,6 +878,47 @@ mod tests {
         p.remove_beat(b);
         assert_eq!(p.clip(ca).unwrap().start, 0);
         assert!(p.clip(cb).is_some(), "footage is never deleted with a beat");
+    }
+
+    #[test]
+    fn a_beat_changing_length_moves_later_footage_together() {
+        let (mut p, m) = project();
+        let a = p.add_beat(None, "A", 4 * SECOND);
+        let b = p.add_beat(None, "B", 4 * SECOND);
+        let ca = p.fill_beat(a, m).unwrap();
+        let cb = p.fill_beat(b, m).unwrap();
+        // Music under both beats, and a second layer in step with B's footage.
+        let music = p.insert_clip(m, 1, 0).unwrap();
+        p.trim_end(music, 8 * SECOND);
+        let over = p.insert_clip(m, 2, 4 * SECOND).unwrap();
+        p.trim_end(over, 6 * SECOND);
+        let tracks = |p: &Project| -> Vec<usize> { [ca, cb, music, over].map(|c| p.slot(c).unwrap().track).to_vec() };
+        let before = tracks(&p);
+
+        // Longer: B's footage and the layer over it move as one; the rest stays.
+        let moved = p.set_beat_duration(a, 6 * SECOND);
+        assert_eq!((moved.by, moved.asked), (2 * SECOND, 2 * SECOND));
+        assert_eq!(moved.clips.len(), 2);
+        assert!(moved.clips.contains(&cb) && moved.clips.contains(&over));
+        assert_eq!(p.clip(cb).unwrap().start, 6 * SECOND);
+        assert_eq!(p.clip(over).unwrap().start, 6 * SECOND);
+        assert_eq!(p.clip(music).unwrap().start, 0);
+        assert_eq!(tracks(&p), before);
+
+        // Shorter than its footage: they close up to A's clip and stop there,
+        // still in step, on the tracks they were on.
+        let moved = p.set_beat_duration(a, 2 * SECOND);
+        assert_eq!((moved.by, moved.asked), (-2 * SECOND, -4 * SECOND));
+        assert_eq!(p.clip(cb).unwrap().start, 4 * SECOND);
+        assert_eq!(p.clip(over).unwrap().start, 4 * SECOND);
+        assert_eq!(tracks(&p), before);
+        assert_eq!(p.story.span(b), Some((2 * SECOND, 6 * SECOND)));
+
+        // The plan alone: nothing on the timeline moves.
+        let lay = p.tracks.clone();
+        p.plan_beat_duration(a, 4 * SECOND);
+        assert_eq!(p.story.span(b), Some((4 * SECOND, 8 * SECOND)));
+        assert_eq!(p.tracks, lay);
     }
 
     #[test]

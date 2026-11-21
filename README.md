@@ -98,7 +98,8 @@ make install-app   # Splice.app in /Applications
   *sound / muted* (H and M act on the selection's tracks).
 - **Canvas**: the first clip sets the canvas shape. The shape button cycles
   16:9, 9:16, 1:1 and 4:5.
-- **Export**: ⌘E (H.264 + AAC MP4), or ⇧⌘E for a fast draft.
+- **Export**: ⌘E (H.264 + AAC MP4), or ⇧⌘E for a fast draft: half the
+  canvas's size, for review, several times quicker than the movie plays.
 - **Everything else**: ⌘/ opens the command menu, with every command and its key.
 
 ## Titles and looks

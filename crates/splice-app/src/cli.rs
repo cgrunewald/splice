@@ -143,7 +143,7 @@ fn resolve_all(store: &Store, project: &Project) -> anyhow::Result<std::collecti
 
 fn export_project(path: &Path, out: &Path, quality: Quality) -> anyhow::Result<()> {
     let store = Store::open(path)?;
-    let project = store.latest()?.unwrap_or_default();
+    let project = export::at_quality(&store.latest()?.unwrap_or_default(), quality);
     let paths = resolve_all(&store, &project)?;
     let resolver = crate::titles::Resolver {
         media: |m: &Media| paths.get(&m.hash).cloned(),

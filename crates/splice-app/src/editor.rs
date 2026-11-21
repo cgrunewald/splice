@@ -167,6 +167,9 @@ enum Overlay {
 #[derive(Default)]
 struct ExportJob {
     output: PathBuf,
+    /// The size of the movie being written (a draft's is half the canvas's).
+    size: (u32, u32),
+    started: Option<Instant>,
     progress: f32,
     done: Option<Result<(), String>>,
     child: Option<Child>,
@@ -1542,18 +1545,31 @@ impl Editor {
         if let Some(waiting) = self.unrendered_in_use() {
             return Err(format!("Cannot export yet: {waiting}"));
         }
-        // Just a stretch: cut from the movie as drawn, so it matches.
-        let planned = match range {
-            Some((a, b)) => export::plan_range(&self.doc.project, &self.resolver(), &output, quality, a, b),
-            None => export::plan(&self.doc.project, &self.resolver(), &output, quality),
+        // As a movie of this quality is drawn (a draft at half size), its
+        // titles drawn for that canvas.
+        let project = export::at_quality(&self.doc.project, quality);
+        let size = (project.settings.width, project.settings.height);
+        let planned = {
+            let resolver = titles::Resolver {
+                canvas: size,
+                ..self.resolver()
+            };
+            // Just a stretch: cut from the movie as drawn, so it matches.
+            match range {
+                Some((a, b)) => export::plan_range(&project, &resolver, &output, quality, a, b),
+                None => export::plan(&project, &resolver, &output, quality),
+            }
         };
         let plan = match planned {
             Ok(plan) => plan,
             Err(e) => return Err(format!("Cannot export: {e}")),
         };
         // Started off the window's thread: reversed clips are made first.
+        let started = Instant::now();
         let job = Arc::new(Mutex::new(ExportJob {
             output: output.clone(),
+            size,
+            started: Some(started),
             ..Default::default()
         }));
         let shared = job.clone();
@@ -1616,7 +1632,10 @@ impl Editor {
                         let Some(result) = done else { return true };
                         editor.export = None;
                         let answer = match &result {
-                            Ok(()) => serde_json::json!({ "ok": true, "path": output }),
+                            Ok(()) => serde_json::json!({
+                                "ok": true, "path": output, "width": size.0, "height": size.1,
+                                "seconds": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+                            }),
                             Err(e) => serde_json::json!({ "ok": false, "error": e }),
                         };
                         for reply in editor.export_replies.drain(..) {

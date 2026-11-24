@@ -656,6 +656,41 @@ impl Keys {
         }
     }
 
+    /// Moves the keyframes at or after `at` (clip time) along by `by`: time
+    /// put in there, the clip held through it.
+    pub fn open_gap(&mut self, at: Time, by: Time) {
+        for prop in Prop::ALL {
+            for k in self.of_mut(prop).iter_mut().filter(|k| k.at >= at) {
+                k.at += by;
+            }
+        }
+    }
+
+    /// Takes the stretch `by` long from `at` (clip time) out: keyframes in
+    /// it go, later ones move up. Each property keeps its value at `at`.
+    pub fn close_gap(&mut self, at: Time, by: Time) {
+        for prop in Prop::ALL {
+            let at_cut = self.value(prop, at);
+            let keys = self.of_mut(prop);
+            let inside = keys.iter().any(|k| k.at >= at && k.at < at + by);
+            keys.retain(|k| k.at < at || k.at >= at + by);
+            for k in keys.iter_mut().filter(|k| k.at >= at + by) {
+                k.at -= by;
+            }
+            if inside && let Some(value) = at_cut {
+                let i = keys.partition_point(|k| k.at < at);
+                keys.insert(
+                    i,
+                    Keyframe {
+                        at,
+                        value,
+                        ease: Ease::default(),
+                    },
+                );
+            }
+        }
+    }
+
     /// Stretches keyframe times by `k` (a clip played at another speed).
     pub fn scale_time(&mut self, k: f64) {
         for prop in Prop::ALL {

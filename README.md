@@ -258,7 +258,10 @@ while you cut it.
   lengthen it.
 - **Footage belongs to the beat it starts in.** Reordering, resizing or
   removing beats carries the footage along. Removing a beat never deletes
-  footage.
+  footage. A beat changing length moves everything that starts after it
+  together, each clip on its own track, so layers stay in step
+  (`story set --duration` lists what moved; `--board-only` changes the plan
+  and moves nothing).
 - **A script:** each beat can hold the lines said in it. **Script** on the
   board (or Load script… in Record) reads a text file into beats:
   - a line starting with `#` begins a beat and names it; without any, each

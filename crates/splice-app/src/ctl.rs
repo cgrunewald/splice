@@ -166,7 +166,11 @@ Story (planning: beats end to end along the timeline, and cues)
   story list                     the plan as a shot list (plain text, in `text`)
   story add --title T [--duration D] [--after BEAT] [--story TEXT] [--capture TEXT]
   story set --beat B [--title T] [--story TEXT] [--capture TEXT] [--script TEXT] [--duration D] [--color C]
-                                 a new length moves the beats after it, footage and all
+            [--board-only]       a new length moves the beats after it, and every clip that starts at
+                                 or after the beat's old end with them: all tracks by the same amount,
+                                 each clip on its own track (`moved`, `shift` in the reply). Closing
+                                 up, they stop at footage that stays (`short_by`). --board-only changes
+                                 the plan alone and moves no clip: for a plan behind a finished edit
   story move --beat B --index I  put a beat at position I (from 0); every beat's footage follows
   story remove --beat B          take a beat out (its footage stays; later beats close up)
   story fill --beat B --media M  lay media into a beat: at its start, as long as the beat
@@ -631,7 +635,7 @@ fn build(args: &[String]) -> Result<Value, String> {
                 request.insert(arg[2..].into(), json!(v));
             }
             "--ripple" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam" | "--drop"
-            | "--plain" | "--replace" | "--heard" => {
+            | "--plain" | "--replace" | "--heard" | "--board-only" => {
                 request.insert(arg[2..].into(), json!(true));
             }
             "--done" | "--undone" => {

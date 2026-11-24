@@ -488,7 +488,27 @@ impl Editor {
             let heard = cx
                 .background_spawn(async move {
                     jobs.iter()
-                        .map(|(clip, path)| crate::speech::transcribe(path, clip.source_in, clip.span()))
+                        .map(|(clip, path)| {
+                            let heard = crate::speech::transcribe(path, clip.source_in, clip.span())?;
+                            // Times fitted to when there is sound: whisper's run over pauses.
+                            let quiet = crate::speech::silences(path, clip.source_in, clip.span()).unwrap_or_default();
+                            let words: Vec<splice_core::captions::Word> = heard
+                                .into_iter()
+                                .map(|w| splice_core::captions::Word {
+                                    text: w.text,
+                                    start: w.start,
+                                    end: w.end,
+                                })
+                                .collect();
+                            Ok(splice_core::captions::fit_to_sound(&words, &quiet)
+                                .into_iter()
+                                .map(|w| crate::speech::Heard {
+                                    text: w.text,
+                                    start: w.start,
+                                    end: w.end,
+                                })
+                                .collect::<Vec<_>>())
+                        })
                         .collect::<anyhow::Result<Vec<_>>>()
                 })
                 .await;

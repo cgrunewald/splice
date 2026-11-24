@@ -219,6 +219,13 @@ splice ctl style --clip 12 --animate pop --by letter     # --animate none: all a
   times the words were heard; the reply's `scripted_beats` says how many
   beats were found. Words said off script stay as heard. `--heard` captions
   the clip as heard, ignoring the script.
+- Caption word times are fitted to the sound (silences found in the clip),
+  so a line goes off soon after its last word rather than staying up
+  through a pause. A line also never runs across a cut on track 1 or the
+  edge of a full-frame colour card. Caption after the cut is final: after
+  inserting pauses or moving pieces, delete the captions and caption again.
+  Under music, pauses are not found and word times can still drift: check
+  with `frame` there.
 - Each caption line lights its words up as they are said (karaoke). Lines
   break at sentences and pauses, a few words each, shared evenly. Japanese and
   Chinese are grouped into words; between them the text holds an invisible

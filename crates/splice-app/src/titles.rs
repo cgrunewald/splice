@@ -161,6 +161,33 @@ pub struct Parts {
     pub units: Units,
 }
 
+/// The room around a title's lines in its picture, for letters `size` tall:
+/// the padding (its box's, or a little clear space) and the shadow's.
+fn margins(title: &Title, size: f32) -> (f32, f32) {
+    let pad = if title.background.is_some() {
+        size * 0.42
+    } else {
+        size * 0.16
+    };
+    let shadow = if title.shadow { size * 0.06 } else { 0.0 };
+    (pad, shadow)
+}
+
+/// How big a title is on a `canvas`: its picture's width and height in
+/// pixels, and how far inside the picture's edges what is seen begins (its
+/// box when it has one, else its lines).
+pub fn measure(title: &Title, canvas: (u32, u32)) -> (f32, f32, f32) {
+    let picture = draw_title_parts(title, canvas).text;
+    let size = (title.size * canvas.1 as f32).clamp(4.0, 2000.0);
+    let (pad, shadow) = margins(title, size);
+    let inset = if title.background.is_some() {
+        shadow
+    } else {
+        pad + shadow
+    };
+    (picture.width as f32, picture.height as f32, inset)
+}
+
 fn draw_title(title: &Title, canvas: (u32, u32)) -> Picture {
     let parts = draw_title_parts(title, canvas);
     match parts.back {
@@ -251,12 +278,7 @@ pub fn draw_title_parts(title: &Title, canvas: (u32, u32)) -> Parts {
         .fold(0.0f32, f32::max)
         .max(line);
 
-    let pad = if title.background.is_some() {
-        size * 0.42
-    } else {
-        size * 0.16
-    };
-    let shadow = if title.shadow { size * 0.06 } else { 0.0 };
+    let (pad, shadow) = margins(title, size);
     let width = (widest + pad * 2.0 + shadow * 2.0).ceil() as u32;
     let full_height = (height + pad * 2.0 + shadow * 2.0).ceil() as u32;
     let mut back = Picture::new(width.max(2), full_height.max(2));

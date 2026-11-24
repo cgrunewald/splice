@@ -691,8 +691,15 @@ impl Project {
 
     /// Puts `clip` on `track` or the first track above it with room, adding a
     /// track on top when none has. Returns the track it landed on.
-    pub(crate) fn place(&mut self, clip: Clip, track: usize) -> usize {
+    ///
+    /// A clip that overlaps a neighbour on `track` by a frame or less meets
+    /// it there instead (see `meet`): times rounded to frames must not send
+    /// a clip up over the layers above.
+    pub(crate) fn place(&mut self, mut clip: Clip, track: usize) -> usize {
         let start = track.min(self.tracks.len());
+        if start < self.tracks.len() {
+            self.meet(&mut clip, start);
+        }
         let found = (start..self.tracks.len()).find(|&i| self.tracks[i].is_free(clip.start, clip.end(), &[]));
         let index = match found {
             Some(i) => i,
@@ -704,6 +711,51 @@ impl Project {
         };
         self.tracks[index].insert_sorted(clip);
         index
+    }
+
+    /// Makes room on `track` for a clip that overlaps its neighbours there by
+    /// a frame or less: at each such overlap the earlier clip ends where the
+    /// later one starts (the clip before `clip` loses its last moment, or
+    /// `clip` loses its own before the clip after it). Starts never move.
+    /// Nothing changes when any overlap is longer, or would leave a clip
+    /// shorter than a frame.
+    fn meet(&mut self, clip: &mut Clip, track: usize) {
+        let frame = self.frame();
+        let over: Vec<(usize, Time)> = self.tracks[track]
+            .clips
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.end() > clip.start && c.start < clip.end())
+            .map(|(i, c)| (i, c.end().min(clip.end()) - c.start.max(clip.start)))
+            .collect();
+        let fits = |(i, by): &(usize, Time)| {
+            let other = &self.tracks[track].clips[*i];
+            let earlier = if other.start < clip.start { other } else { &*clip };
+            *by <= frame && other.start != clip.start && earlier.duration - by >= frame
+        };
+        if over.is_empty() || !over.iter().all(fits) {
+            return;
+        }
+        for (i, by) in over {
+            let before = self.tracks[track].clips[i].start < clip.start;
+            let media = if before {
+                self.tracks[track].clips[i].media
+            } else {
+                clip.media
+            };
+            let timed = self.media(media).is_some_and(Media::is_timed);
+            let earlier = if before {
+                &mut self.tracks[track].clips[i]
+            } else {
+                &mut *clip
+            };
+            let out = earlier.source_out();
+            earlier.duration -= by;
+            // Backwards, its end is where its stretch of source starts.
+            if timed && earlier.generator.is_none() && !earlier.frozen && earlier.reverse {
+                earlier.source_in = (out - earlier.span()).max(0);
+            }
+        }
     }
 
     /// Drops trailing and inner empty tracks, keeping at least one.
@@ -1267,6 +1319,37 @@ mod tests {
         assert_eq!(p.clip(b).unwrap().start, p.clip(a).unwrap().end());
         assert_eq!(p.tracks.len(), 1);
         assert_eq!(p.duration(), 8 * SECOND);
+    }
+
+    #[test]
+    fn a_clip_a_frame_or_less_over_its_neighbour_meets_it() {
+        // Clips a hair longer than the spacing they are placed at, as times
+        // rounded to frames give: each ends where the next starts.
+        let (mut p, m) = project_with(26_667_000);
+        let step = 26_640_000;
+        let ids: Vec<ClipId> = (0..4).map(|k| p.insert_clip(m, 0, k * step).unwrap()).collect();
+        assert_eq!(p.tracks.len(), 1, "none rose");
+        for (k, id) in ids.iter().enumerate() {
+            let c = p.clip(*id).unwrap();
+            assert_eq!(c.start, k as Time * step, "starts stay where asked");
+            let whole = k == ids.len() - 1;
+            assert_eq!(c.duration, if whole { 26_667_000 } else { step });
+        }
+        // Placed before a clip and a hair over its start: the new clip is cut.
+        let (mut p, m) = project_with(2 * SECOND);
+        let later = p.insert_clip(m, 0, 2 * SECOND - 20_000).unwrap();
+        let first = p.insert_clip(m, 0, 0).unwrap();
+        assert_eq!(p.tracks.len(), 1);
+        assert_eq!(p.clip(first).unwrap().duration, 2 * SECOND - 20_000);
+        assert_eq!(p.clip(later).unwrap().duration, 2 * SECOND);
+        // Moved a hair over the one before: that one is cut, not the mover.
+        p.move_clips(&[later], 2 * SECOND, 0);
+        p.move_clips(&[later], -2 * SECOND - 15_000, 0);
+        assert_eq!(p.tracks.len(), 1);
+        assert_eq!(p.clip(first).unwrap().end(), p.clip(later).unwrap().start);
+        // More than a frame over still rises.
+        let over = p.insert_clip(m, 0, SECOND).unwrap();
+        assert_eq!(p.slot(over).unwrap().track, 1);
     }
 
     #[test]

@@ -937,15 +937,112 @@ fn open(source: &str) -> anyhow::Result<Value> {
 
 /// Merges `patch` into the layer named `layer`, or into the scene itself.
 pub fn patch(source: &str, layer: Option<&str>, patch: &Value) -> anyhow::Result<String> {
+    patch_which(source, layer.map_or(Which::Scene, Which::Named), patch)
+}
+
+/// Which part of a scene a change is for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Which<'a> {
+    /// The scene itself.
+    Scene,
+    /// The layer with this `name`.
+    Named(&'a str),
+    /// The one layer whose text is this, or failing that has this in it
+    /// (capitals aside): for a scene made without names.
+    Saying(&'a str),
+    /// The layer at this place in the outline, from 0 (`index` there).
+    Numbered(usize),
+}
+
+/// A layer's path from the top of the scene's JSON, and its text.
+type Placed = (Vec<(&'static str, usize)>, Option<String>);
+
+/// Where each layer is in the scene's JSON, in the outline's order: the
+/// keys and places to follow from the top, and the layer's text.
+fn layer_paths(value: &Value) -> Vec<Placed> {
+    fn walk(value: &Value, at: &[(&'static str, usize)], out: &mut Vec<Placed>) {
+        for key in ["layers", "children"] {
+            for (i, layer) in value
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let mut path = at.to_vec();
+                path.push((key, i));
+                let text = layer.get("text").and_then(Value::as_str).map(str::to_string);
+                out.push((path.clone(), text));
+                walk(layer, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(value, &[], &mut out);
+    out
+}
+
+/// Merges `patch` into one layer of the scene, or into the scene itself.
+pub fn patch_which(source: &str, which: Which, patch: &Value) -> anyhow::Result<String> {
     let mut value = open(source)?;
-    match layer {
-        Some(name) => {
+    let paths = layer_paths(&value);
+    let path = match which {
+        Which::Scene => Vec::new(),
+        Which::Named(name) => {
             let snapshot = value.clone();
             let target = find(&mut value, name).ok_or_else(|| missing(&snapshot, name))?;
             merge(target, patch);
+            return finish(&value);
         }
-        None => merge(&mut value, patch),
+        Which::Numbered(n) => match paths.get(n) {
+            Some((path, _)) => path.clone(),
+            None => anyhow::bail!(
+                "there is no layer {n}: the scene has {} (0 to {}, `index` in its outline)",
+                paths.len(),
+                paths.len().saturating_sub(1)
+            ),
+        },
+        Which::Saying(words) => {
+            let texts = || -> Vec<String> {
+                let said = paths
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, (_, t))| Some((i, t.as_ref()?)));
+                said.map(|(i, t)| format!("{i}: {t:?}")).collect()
+            };
+            let lower = words.to_lowercase();
+            let exact: Vec<usize> = (0..paths.len())
+                .filter(|i| paths[*i].1.as_deref() == Some(words))
+                .collect();
+            let found = if exact.is_empty() {
+                let has = |t: &Option<String>| t.as_ref().is_some_and(|t| t.to_lowercase().contains(&lower));
+                (0..paths.len()).filter(|i| has(&paths[*i].1)).collect()
+            } else {
+                exact
+            };
+            match found[..] {
+                [one] => paths[one].0.clone(),
+                [] if texts().is_empty() => anyhow::bail!("no layer says {words:?}: the scene has no text"),
+                [] => anyhow::bail!("no layer says {words:?}; layers with text: {}", texts().join(", ")),
+                _ => {
+                    let which: Vec<String> = found.iter().map(|i| i.to_string()).collect();
+                    anyhow::bail!(
+                        "{} layers say {words:?} (layers {}): name one by its place, with --index",
+                        found.len(),
+                        which.join(", ")
+                    )
+                }
+            }
+        }
+    };
+    let mut target = &mut value;
+    for (key, i) in path {
+        target = target
+            .get_mut(key)
+            .and_then(|list| list.get_mut(i))
+            .ok_or_else(|| anyhow::anyhow!("the layer is not there"))?;
     }
+    merge(target, patch);
     finish(&value)
 }
 
@@ -998,6 +1095,8 @@ pub fn outline(spec: &Spec) -> Vec<Value> {
     fn walk(layers: &[Layer], delay: f64, out: &mut Vec<Value>, depth: usize) {
         for layer in layers {
             let mut line = serde_json::Map::new();
+            // Its place among the layers: a layer without a name is patched by it.
+            line.insert("index".into(), out.len().into());
             line.insert("type".into(), serde_json::to_value(layer.kind).unwrap_or(Value::Null));
             if let Some(n) = &layer.name {
                 line.insert("name".into(), n.clone().into());
@@ -1235,6 +1334,45 @@ mod tests {
         assert!(e.to_string().contains("link-1, link-2, steps"), "{e}");
         let e = patch(source, Some("link-1"), &serde_json::json!({ "stroke": "#zz" })).unwrap_err();
         assert!(e.to_string().contains("not a colour"), "{e}");
+    }
+
+    #[test]
+    fn edits_layers_without_names() {
+        let source = r##"{ "layers": [
+            { "type": "rect", "fill": "#101010" },
+            { "type": "group", "children": [
+                { "type": "text", "text": "It is not your title" },
+                { "type": "text", "text": "It is your reach" } ] },
+            { "type": "text", "text": "Reach" } ] }"##;
+        let text_at = |source: &str, i: usize| -> Option<String> {
+            let value: Value = serde_json::from_str(source).unwrap();
+            layer_paths(&value)[i].1.clone()
+        };
+        // By a part of its text that only one layer has, capitals aside.
+        let to = serde_json::json!({ "text": "It is not your role" });
+        let changed = patch_which(source, Which::Saying("NOT YOUR TITLE"), &to).unwrap();
+        assert_eq!(text_at(&changed, 2).as_deref(), Some("It is not your role"));
+        // All of a text wins over a part of another.
+        let changed = patch_which(source, Which::Saying("Reach"), &serde_json::json!({ "text": "Range" })).unwrap();
+        assert_eq!(text_at(&changed, 4).as_deref(), Some("Range"));
+        assert_eq!(text_at(&changed, 3).as_deref(), Some("It is your reach"));
+        // By its place in the outline, which numbers every layer.
+        let spec = Spec::parse(source).unwrap();
+        let places: Vec<u64> = outline(&spec).iter().filter_map(|l| l["index"].as_u64()).collect();
+        assert_eq!(places, [0, 1, 2, 3, 4]);
+        let changed = patch_which(source, Which::Numbered(3), &serde_json::json!({ "text": "Yours" })).unwrap();
+        assert_eq!(text_at(&changed, 3).as_deref(), Some("Yours"));
+        // Says what there is when it cannot tell.
+        let e = patch_which(source, Which::Saying("it is"), &to)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("2 layers") && e.contains("2, 3"), "{e}");
+        let e = patch_which(source, Which::Saying("nowhere"), &to)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("4: \"Reach\""), "{e}");
+        let e = patch_which(source, Which::Numbered(9), &to).unwrap_err().to_string();
+        assert!(e.contains("0 to 4"), "{e}");
     }
 
     #[test]

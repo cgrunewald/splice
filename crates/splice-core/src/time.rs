@@ -25,6 +25,19 @@ pub fn floor_to_frame(t: Time, fps: u32) -> Time {
     (index * SECOND as i128 / fps) as Time
 }
 
+/// The first frame at or after `t`: frame `n` is the picture at `n / fps`.
+/// A time a microsecond past a frame (a frame's time, rounded) is that frame.
+pub fn frame_from(t: Time, fps: u32) -> i64 {
+    let fps = fps.max(1) as i128;
+    -((-(t as i128 - 1) * fps).div_euclid(SECOND as i128)) as i64
+}
+
+/// When frame `n` is, to the nearest microsecond.
+pub fn frame_time(n: i64, fps: u32) -> Time {
+    let fps = fps.max(1) as i128;
+    ((n as i128 * SECOND as i128 * 2 + fps).div_euclid(fps * 2)) as Time
+}
+
 /// `mm:ss:ff`, or `h:mm:ss:ff` past an hour.
 pub fn timecode(t: Time, fps: u32) -> String {
     let t = t.max(0);

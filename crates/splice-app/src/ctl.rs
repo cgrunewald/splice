@@ -21,8 +21,11 @@ Looking
   versions                       the versions kept in the project file
 
 Media
-  import <file>... [--at T] [--track N]
-                                 bring files into the project; with --at, also place them end to end
+  import <file>... [--at T] [--track N] [--separate]
+                                 bring files into the project; with --at, also place them end to end.
+                                 A file with the same bytes as media already there reuses that media,
+                                 under the name it had (`reused` in the reply: use the id, not a name);
+                                 --separate keeps it as media of its own, under its own name
 
 Editing (each is one undo step; clips and media are named by id, media also by name)
   add --media M [--at T] [--track N]       put media on the timeline (default: the end of track N)
@@ -731,8 +734,8 @@ fn build(args: &[String]) -> Result<Value, String> {
             "--ripple" if ripple_mode => {
                 request.insert("ripple".into(), json!(next(arg)?));
             }
-            "--ripple" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam" | "--drop"
-            | "--plain" | "--replace" | "--heard" | "--board-only" => {
+            "--ripple" | "--separate" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam"
+            | "--drop" | "--plain" | "--replace" | "--heard" | "--board-only" => {
                 request.insert(arg[2..].into(), json!(true));
             }
             "--done" | "--undone" => {
@@ -1049,6 +1052,8 @@ mod tests {
             r,
             json!({"cmd": "duplicate", "clips": [346], "to": 82.6, "track": 8, "source_in": 12.4, "for": 2.5})
         );
+        let r = build(&args("import /m/g09v6.mp4 --separate")).unwrap();
+        assert_eq!(r, json!({"cmd": "import", "files": ["/m/g09v6.mp4"], "separate": true}));
         let r = build(&args("add --media logo.png --at end")).unwrap();
         assert_eq!(r, json!({"cmd": "add", "media": "logo.png", "at": "end"}));
         let r = build(&args("track --track 1 --mute --show")).unwrap();

@@ -100,7 +100,11 @@ splice ctl undo
 ```
 
 - Clips on one track never overlap. A clip placed or moved where there is no
-  room rises to the first free track above; the reply shows where it landed.
+  room rises to the first free track above; the reply shows where it landed,
+  and lists it under `rose` (it now covers the layers between: check it is
+  where you meant). A clip only a frame or less over its neighbour (times
+  rounded to frames) does not rise: the earlier of the two is cut to end at
+  the cut, listed under `trimmed`.
 - `trim` keeps a video clip inside its media: you cannot extend it past the
   file's start or end. Images can be any length.
 - `split` returns the new right halves under `new`.

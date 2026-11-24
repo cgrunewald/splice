@@ -43,6 +43,23 @@ impl Quality {
     }
 }
 
+/// A draft's canvas is at least this many pixels on its short side.
+const DRAFT_SHORT: u32 = 270;
+
+/// The project as a movie of `quality` is drawn. A draft is drawn at half
+/// size, a quarter of the pixels to key, mask, lay over each other and
+/// encode: everything on the canvas is placed and sized by fractions of
+/// it, so the picture is the same, smaller. Draw its titles for this
+/// project's canvas (`Resolve::generated`).
+pub fn at_quality(project: &Project, quality: Quality) -> Project {
+    let mut project = project.clone();
+    let s = &mut project.settings;
+    if quality == Quality::Draft && s.width.min(s.height) / 2 >= DRAFT_SHORT {
+        (s.width, s.height) = ((s.width / 4 * 2).max(2), (s.height / 4 * 2).max(2));
+    }
+    project
+}
+
 #[derive(Debug)]
 pub struct Plan {
     pub args: Vec<String>,
@@ -375,8 +392,12 @@ fn build(
                 let frames = match (look.backdrop, source) {
                     (Some(backdrop), Source::Media(_)) => {
                         filters.push(format!("[{frames}]split[{frames}m][{frames}b]"));
+                        // Blurred small: a blur wants no detail, and a
+                        // large picture is slow to blur.
+                        let small = shrunk(size, BACKDROP_SHORT as f64 / size.0.min(size.1) as f64);
                         let mut chain = vec![
-                            backdrop.ffmpeg(size),
+                            format!("scale={}:{}", small.0, small.1),
+                            backdrop.ffmpeg(small),
                             format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"),
                             "format=rgba".to_string(),
                         ];
@@ -577,14 +598,31 @@ fn build(
                         continue;
                     }
                     let mut chain = Vec::new();
-                    if matches!(source, Source::Media(_)) {
-                        let pixels = if hidden {
-                            let rest = look.clone_without_hiding();
-                            rest.pixel_filters(size, 1.0, &format!("x{tag}"))
-                        } else {
-                            look.pixel_filters(size, 1.0, &format!("x{tag}"))
+                    if let Source::Media(media) = source {
+                        // A picture shown smaller than its file is made that
+                        // small first, when its size does not change: its key,
+                        // mask, blur and colour are worked on a fraction of the
+                        // pixels. (One whose size moves keeps its natural size.)
+                        let settled = match still_at {
+                            Some(t) => pose.at(secs(t - clip.start)).scale,
+                            None if !pose.moves() => pose.at(0.0).scale,
+                            None => 1.0,
                         };
-                        if let Some(pixels) = pixels {
+                        let fit = natural.0 / media.width.max(2) as f64;
+                        let k = (fit * settled).min(1.0);
+                        let rest = if hidden {
+                            look.clone_without_hiding()
+                        } else {
+                            look.clone()
+                        };
+                        let (size, k) = if k < 0.9 && rest.has_pixel_filters() {
+                            let small = shrunk(size, k);
+                            chain.push(format!("scale={}:{}", small.0, small.1));
+                            (small, k as f32)
+                        } else {
+                            (size, 1.0)
+                        };
+                        if let Some(pixels) = rest.pixel_filters(size, k, &format!("x{tag}")) {
                             chain.push(pixels);
                         }
                     }
@@ -943,6 +981,17 @@ fn scratch_dir() -> PathBuf {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ))
+}
+
+/// A backdrop is blurred with its short side this long, then scaled up.
+const BACKDROP_SHORT: u32 = 360;
+
+/// `size` made `k` times as big, when that is smaller: even, at least 2.
+fn shrunk(size: (u32, u32), k: f64) -> (u32, u32) {
+    if k >= 1.0 {
+        return size;
+    }
+    (even(size.0 as f64 * k), even(size.1 as f64 * k))
 }
 
 /// A clip drawn on whole frames: frame `n` of the movie is the picture at
@@ -1568,6 +1617,42 @@ mod tests {
         assert!(graph.contains("atrim=start=1.000000:end=3.000000"));
         assert_eq!(plan.duration, 2 * SECOND);
         assert!(plan_range(&p, &Fake, Path::new("/tmp/x.mp4"), Quality::Draft, 3 * SECOND, SECOND).is_err());
+    }
+
+    #[test]
+    fn a_small_picture_is_keyed_small_and_a_draft_is_half_size() {
+        let mut p = Project::default();
+        let m = video(&mut p, "cam", 4);
+        let c = p.append_clip(m).unwrap();
+        let (w, h) = (p.settings.width, p.settings.height);
+        p.set_look(c, |l| {
+            l.scale = 0.4;
+            l.key = Some(Default::default());
+            l.backdrop = Some(Default::default());
+        });
+        let plan = plan(&p, &Fake, Path::new("/o.mp4"), Quality::Standard).unwrap();
+        let g = graph(&plan);
+        // Made the size it is shown first, then keyed.
+        let small = format!("scale={}:{},chromakey", even(w as f64 * 0.4), even(h as f64 * 0.4));
+        assert!(g.contains(&small), "{g}");
+        // Its backdrop is blurred small, then covers the canvas.
+        assert!(g.contains("scale=640:360,boxblur"), "{g}");
+        // Shown whole, it is keyed as it is.
+        p.set_look(c, |l| l.scale = 1.0);
+        let plan = plan_of(&p);
+        assert!(graph(&plan).contains("]chromakey"), "{}", graph(&plan));
+
+        // A draft: half the canvas, never tiny.
+        let draft = at_quality(&p, Quality::Draft);
+        assert_eq!((draft.settings.width, draft.settings.height), (w / 2, h / 2));
+        assert_eq!(at_quality(&p, Quality::High).settings, p.settings);
+        let mut tiny = p.clone();
+        (tiny.settings.width, tiny.settings.height) = (480, 270);
+        assert_eq!(at_quality(&tiny, Quality::Draft).settings, tiny.settings);
+    }
+
+    fn plan_of(p: &Project) -> Plan {
+        plan(p, &Fake, Path::new("/o.mp4"), Quality::Standard).unwrap()
     }
 
     #[test]

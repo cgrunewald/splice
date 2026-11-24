@@ -666,9 +666,16 @@ splice ctl say --text "Cut the pauses; 12s shorter now."
 splice ctl versions                  # kept inside the project file
 splice ctl save --label "rough cut"  # keep a version (only when asked)
 splice ctl export ~/Movies/cut.mp4 --wait          # --draft (fast), --high
+splice ctl export /tmp/check.mp4 --draft --from 58 --to 66 --wait   # one stretch, to check a fix
 ```
 
-Export without `--wait` returns at once; `status` shows its `progress`.
+Export without `--wait` returns at once; `status` shows its `progress`, the
+seconds `elapsed` and about how many are `left`. With `--wait`, progress
+lines go to stderr and the reply (stdout) gives the movie's size and how
+long it took. `--draft` is drawn at half the canvas's size and is several
+times quicker than the movie plays: use it for every review pass, and
+export only the stretch you changed (`--from/--to`, `--clip`, `--beat`)
+rather than the whole movie. Export at full quality once, at the end.
 
 ### Operating the window
 

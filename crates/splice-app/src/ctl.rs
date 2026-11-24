@@ -285,7 +285,10 @@ Playing and the window
   command <words>                          run a command from the command menu (zoom fit, versions)
   save [--label TEXT]                      keep a version
   export <file.mp4> [--draft|--high] [--from T --to T | --clip C | --beat B] [--wait]
-                                 the movie, or just a stretch of it (a clip's span, a beat)
+                                 the movie, or just a stretch of it (a clip's span, a beat): to check
+                                 a fix, export the stretch, not the whole movie. --draft is drawn at
+                                 half size and encoded fast, for review. --wait prints progress and
+                                 the time left on stderr as it goes; `status` has them too (`export`)
   say --text TEXT                          show one line in Splice's status bar
 
 Talking with the person
@@ -458,6 +461,45 @@ fn choose(wanted: Option<&str>) -> Result<PathBuf, String> {
             "several windows match {wanted}; give its path: {}",
             listing(&open)
         )),
+    }
+}
+
+/// While an export runs in that window, prints how far it is and about
+/// how long is left, each time it passes another tenth.
+fn watch_export(socket: &std::path::Path) {
+    let mut said = 0;
+    let mut seen = false;
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let Some(reply) = ask(socket, r#"{"cmd":"status"}"#, false) else {
+            return;
+        };
+        let status: Value = serde_json::from_str(&reply).unwrap_or(Value::Null);
+        let Some(progress) = status["export"]["progress"].as_f64() else {
+            // Not started yet, or over.
+            if seen {
+                return;
+            }
+            continue;
+        };
+        seen = true;
+        let tenth = (progress * 10.0).floor() as u32;
+        if tenth > said {
+            said = tenth;
+            eprintln!("{}", export_line(progress, status["export"]["left"].as_f64()));
+        }
+    }
+}
+
+/// One line of an export's progress: `export 40%, about 1:05 left`.
+fn export_line(progress: f64, left: Option<f64>) -> String {
+    let percent = (progress * 100.0).round() as u32;
+    match left {
+        Some(left) => {
+            let left = left.max(0.0).round() as u64;
+            format!("export {percent}%, about {}:{:02} left", left / 60, left % 60)
+        }
+        None => format!("export {percent}%"),
     }
 }
 
@@ -865,6 +907,11 @@ pub fn cli(args: &[String]) -> i32 {
             return 1;
         }
     };
+    // A long wait says how it is going (on stderr; the reply alone is on stdout).
+    if request["cmd"] == json!("export") && request["wait"] == json!(true) {
+        let socket = socket.clone();
+        std::thread::spawn(move || watch_export(&socket));
+    }
     let Some(reply) = ask(&socket, &request.to_string(), patient) else {
         println!("{:#}", fail("that Splice window did not answer; it may have closed"));
         return 1;
@@ -880,6 +927,12 @@ mod tests {
 
     fn args(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn export_progress_reads_plainly() {
+        assert_eq!(export_line(0.4, Some(65.4)), "export 40%, about 1:05 left");
+        assert_eq!(export_line(0.02, None), "export 2%");
     }
 
     #[test]

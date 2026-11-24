@@ -1154,7 +1154,18 @@ impl Editor {
         let settings = project.settings;
         let export = self.export.as_ref().map(|job| {
             let job = job.lock().unwrap();
-            json!({ "path": job.output, "progress": (job.progress * 100.0).round() / 100.0 })
+            // How long it has run, and at this rate how long is left.
+            let elapsed = job.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+            let left =
+                (job.progress > 0.02).then(|| (elapsed * (1.0 - job.progress as f64) / job.progress as f64).round());
+            json!({
+                "path": job.output,
+                "progress": (job.progress * 100.0).round() / 100.0,
+                "elapsed": elapsed.round(),
+                "left": left,
+                "width": job.size.0,
+                "height": job.size.1,
+            })
         });
         json!({
             "ok": true,

@@ -474,6 +474,17 @@ impl Editor {
                         .unwrap_or(0)
                 });
                 let mut look = splice_core::look::Look::default();
+                // `--anchor`: --x and --y place that edge or corner of it.
+                let anchored = match Anchor::of(request) {
+                    Ok(Some(anchor)) => {
+                        let scale = request.get("scale").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+                        let half = self.half_extent(&generator, None, scale);
+                        Some(anchor.to_centre(request, half, true))
+                    }
+                    Ok(None) => None,
+                    Err(e) => return Some(fail(e)),
+                };
+                let request = anchored.as_ref().unwrap_or(request);
                 if let Err(e) = apply_look(&mut look, request, 0) {
                     return Some(fail(e));
                 }
@@ -487,24 +498,37 @@ impl Editor {
                     p.set_look(id, |l| *l = look);
                     id
                 });
-                self.edited_with(json!({ "clip": self.clip_json(id) }))
+                self.edited_with(json!({ "clip": self.clip_json_with_bounds(id) }))
             }
             "style" => {
                 let ids = match self.clips(request) {
                     Ok(ids) => ids,
                     Err(e) => return Some(fail(e)),
                 };
+                let anchor = match Anchor::of(request) {
+                    Ok(anchor) => anchor,
+                    Err(e) => return Some(fail(e)),
+                };
                 let mut titles = Vec::new();
+                // `--anchor`: that edge or corner stays put as the title changes size.
+                let mut shifts = Vec::new();
                 for &id in &ids {
                     match self.doc.project.clip(id).and_then(|c| c.generator.clone()) {
                         Some(Generator::Text(mut title)) => {
+                            let scale = self.doc.project.clip(id).map_or(1.0, |c| c.look.scale);
+                            let was = anchor.map(|_| self.half_extent(&Generator::Text(title.clone()), None, scale));
                             if let Some(words) = text("text") {
                                 title.text = words.to_string();
                             }
                             if let Err(e) = self.apply_style(&mut title, request) {
                                 return Some(fail(e));
                             }
-                            titles.push((id, Generator::Text(title)));
+                            let generator = Generator::Text(title);
+                            if let (Some(anchor), Some(was)) = (anchor, was) {
+                                let now = self.half_extent(&generator, None, scale);
+                                shifts.push((id, anchor.shift((now.0 - was.0, now.1 - was.1))));
+                            }
+                            titles.push((id, generator));
                         }
                         Some(Generator::Color { .. }) => match text("color").map(parse_color) {
                             Some(Some(color)) => titles.push((id, Generator::Color { color })),
@@ -522,8 +546,16 @@ impl Editor {
                     for (id, generator) in titles {
                         p.set_generator(id, |g| *g = generator);
                     }
+                    for (id, (dx, dy)) in shifts {
+                        p.set_look(id, |l| {
+                            l.x += dx;
+                            l.y += dy;
+                            l.keys.x.iter_mut().for_each(|k| k.value += dx);
+                            l.keys.y.iter_mut().for_each(|k| k.value += dy);
+                        });
+                    }
                 });
-                let clips: Vec<Value> = ids.iter().map(|id| self.clip_json(*id)).collect();
+                let clips: Vec<Value> = ids.iter().map(|id| self.clip_json_with_bounds(*id)).collect();
                 self.edited_with(json!({ "clips": clips }))
             }
             "look" => {
@@ -549,7 +581,23 @@ impl Editor {
                     };
                     let mut look = clip.look.clone();
                     let at = (self.player.position - clip.start).clamp(0, clip.duration);
-                    if let Err(e) = apply_look(&mut look, request, at) {
+                    // `--anchor`: --x and --y place that edge or corner of it.
+                    let anchored = match Anchor::of(request) {
+                        Ok(Some(anchor)) => {
+                            let scale = request
+                                .get("scale")
+                                .and_then(Value::as_f64)
+                                .map_or(look.scale, |v| v as f32);
+                            let half = match &clip.generator {
+                                Some(generator) => self.half_extent(generator, None, scale),
+                                None => self.half_extent(&Generator::Color { color: 0 }, Some(clip), scale),
+                            };
+                            Some(anchor.to_centre(request, half, false))
+                        }
+                        Ok(None) => None,
+                        Err(e) => return Some(fail(e)),
+                    };
+                    if let Err(e) = apply_look(&mut look, anchored.as_ref().unwrap_or(request), at) {
                         return Some(fail(e));
                     }
                     if look.key.is_some() && clip.generator.is_some() {
@@ -579,7 +627,7 @@ impl Editor {
                         p.set_look(id, |l| *l = look);
                     }
                 });
-                let clips: Vec<Value> = ids.iter().map(|id| self.clip_json(*id)).collect();
+                let clips: Vec<Value> = ids.iter().map(|id| self.clip_json_with_bounds(*id)).collect();
                 self.edited_with(json!({ "clips": clips }))
             }
             "fonts" => {
@@ -931,7 +979,50 @@ impl Editor {
         extra
     }
 
-    /// A clip as `ctl` shows it: times in seconds, its track counted from 1.
+    /// Half the size of what is seen of a picture at `scale`, as fractions of
+    /// the canvas: a title or colour as drawn (a title without the clear
+    /// room around its lines), or `media`'s clip fitted to the canvas.
+    fn half_extent(&self, generator: &Generator, media: Option<&splice_core::model::Clip>, scale: f32) -> (f32, f32) {
+        let project = &self.doc.project;
+        let canvas = (project.settings.width, project.settings.height);
+        let (w, h, inset) = match (media, generator) {
+            (Some(clip), _) => {
+                let size = project
+                    .source(clip)
+                    .map(|source| splice_core::export::natural_size(source, None, canvas.0, canvas.1));
+                let (w, h) = size.unwrap_or((canvas.0 as f64, canvas.1 as f64));
+                (w as f32, h as f32, 0.0)
+            }
+            (None, Generator::Text(title)) => titles::measure(title, canvas),
+            (None, Generator::Color { .. }) => (canvas.0 as f32, canvas.1 as f32, 0.0),
+        };
+        (
+            (w / 2.0 - inset).max(0.0) * scale / canvas.0 as f32,
+            (h / 2.0 - inset).max(0.0) * scale / canvas.1 as f32,
+        )
+    }
+
+    /// A clip for a reply, with where its edges are on the canvas at its
+    /// start (`bounds`, in the units of --x and --y: 0 is the centre, ±0.5
+    /// the canvas's edges), so a script can lay things out against it.
+    fn clip_json_with_bounds(&self, id: ClipId) -> Value {
+        let mut value = self.clip_json(id);
+        if let Some(clip) = self.doc.project.clip(id) {
+            let look = &clip.look;
+            let (hw, hh) = match &clip.generator {
+                Some(generator) => self.half_extent(generator, None, look.scale),
+                None => self.half_extent(&Generator::Color { color: 0 }, Some(clip), look.scale),
+            };
+            let r = |v: f32| (v as f64 * 10000.0).round() / 10000.0;
+            value["bounds"] = json!({
+                "left": r(look.x - hw), "right": r(look.x + hw),
+                "top": r(look.y - hh), "bottom": r(look.y + hh),
+                "width": r(hw * 2.0), "height": r(hh * 2.0),
+            });
+        }
+        value
+    }
+
     /// How long every clip is, to tell afterwards which an edit cut short.
     fn lengths(&self) -> Vec<(ClipId, Time)> {
         self.doc.project.clips().map(|(_, c)| (c.id, c.duration)).collect()
@@ -974,6 +1065,7 @@ impl Editor {
         }
     }
 
+    /// A clip as `ctl` shows it: times in seconds, its track counted from 1.
     pub(super) fn clip_json(&self, id: ClipId) -> Value {
         let project = &self.doc.project;
         let (Some(slot), Some(clip)) = (project.slot(id), project.clip(id)) else {
@@ -1204,6 +1296,61 @@ impl Editor {
 
 /// Look fields from a request, onto `look`.
 /// `at` is clip time, where a keyframed value is keyed.
+/// The point of a picture that `--x` and `--y` place: its centre, an edge
+/// or a corner. Each is -1 (left, top), 0 (the middle) or 1 (right, bottom).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Anchor {
+    across: f32,
+    down: f32,
+}
+
+impl Anchor {
+    /// The request's `anchor`: left, right, top, bottom, center, or a
+    /// corner as two of them (top-left, bottom-right).
+    pub(super) fn of(request: &Value) -> Result<Option<Anchor>, String> {
+        let Some(words) = request.get("anchor").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let mut anchor = Anchor { across: 0.0, down: 0.0 };
+        for word in words.split(['-', ' ', '_']).filter(|w| !w.is_empty()) {
+            match word {
+                "left" => anchor.across = -1.0,
+                "right" => anchor.across = 1.0,
+                "top" => anchor.down = -1.0,
+                "bottom" => anchor.down = 1.0,
+                "center" | "centre" | "middle" => {}
+                _ => {
+                    return Err(
+                        "`anchor` is left, right, top, bottom, center, or a corner such as top-left or bottom-right"
+                            .into(),
+                    );
+                }
+            }
+        }
+        Ok(Some(anchor))
+    }
+
+    /// How far the centre moves to keep this point still when the picture's
+    /// half size grows by `grown`.
+    fn shift(self, grown: (f32, f32)) -> (f32, f32) {
+        (-self.across * grown.0, -self.down * grown.1)
+    }
+
+    /// The request with `x` and `y` naming the picture's centre, as looks
+    /// hold them, for a picture of half size `half`. A value not given is
+    /// left out (`or_zero`: taken as 0, the canvas's centre, for a new clip).
+    fn to_centre(self, request: &Value, half: (f32, f32), or_zero: bool) -> Value {
+        let mut out = request.clone();
+        for (key, toward, half) in [("x", self.across, half.0), ("y", self.down, half.1)] {
+            let given = request.get(key).and_then(Value::as_f64);
+            if let Some(v) = given.or(or_zero.then_some(0.0)) {
+                out[key] = json!(v - (toward * half) as f64);
+            }
+        }
+        out
+    }
+}
+
 pub(super) fn apply_look(look: &mut splice_core::look::Look, request: &Value, at: Time) -> Result<(), String> {
     use splice_core::look::{Drift, Key, Mask, MotionKind, Shape};
     let text = |key: &str| request.get(key).and_then(Value::as_str);
@@ -1337,4 +1484,35 @@ pub(super) fn apply_look(look: &mut splice_core::look::Look, request: &Value, at
         look.crop = (!c.is_none()).then_some(c);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_anchor_places_an_edge_or_a_corner() {
+        let of = |words: &str| Anchor::of(&json!({ "anchor": words }));
+        assert_eq!(Anchor::of(&json!({})), Ok(None));
+        assert!(of("sideways").is_err());
+        let half = (0.2, 0.05);
+        // Left edge at -0.45: the centre is half a width to its right.
+        let left = of("left").unwrap().unwrap();
+        let placed = left.to_centre(&json!({ "x": -0.45, "y": 0.3 }), half, false);
+        assert!((placed["x"].as_f64().unwrap() + 0.25).abs() < 1e-6);
+        assert!(
+            (placed["y"].as_f64().unwrap() - 0.3).abs() < 1e-6,
+            "not anchored down: y is the centre"
+        );
+        // A corner, and what is not given: left alone, or the canvas's centre for a new clip.
+        let corner = of("bottom-right").unwrap().unwrap();
+        let placed = corner.to_centre(&json!({ "x": 0.45 }), half, false);
+        assert!((placed["x"].as_f64().unwrap() - 0.25).abs() < 1e-6);
+        assert!(placed.get("y").is_none());
+        let placed = corner.to_centre(&json!({}), half, true);
+        assert!((placed["y"].as_f64().unwrap() + 0.05).abs() < 1e-6);
+        // Growing wider by 0.1 each side: the centre moves right to keep the left edge.
+        assert_eq!(left.shift((0.1, 0.02)), (0.1, 0.0));
+        assert_eq!(of("center").unwrap().unwrap().shift((0.1, 0.02)), (0.0, 0.0));
+    }
 }

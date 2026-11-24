@@ -95,10 +95,13 @@ Transitions, speed and keyframes
   zoom --clip C [--to 2] | --none          a screen recording made in Splice: zoom in towards each burst
                                  of clicks noted while recording (keyframes on place and size)
   leak --kind warm|sun|cool [--at T]       a light leak washing over what is there, 4s (a scene: edit as one)
-  captions --clip C [--words N] [--plain] [--heard] [--wait]
-                                 hear what is said in clip C (on this Mac, whisper.cpp) and lay captions
-                                 over it on a new track: lines of up to N words (6), each word lighting up
-                                 as it is said (--plain: whole lines). Each caption is a title to edit.
+  captions --clip C[,C…] | --track N | --from T --to T  [--words N] [--plain] [--heard] [--wait]
+                                 hear what is said (on this Mac, whisper.cpp) and lay captions over it
+                                 on one new track, at timeline times: in the clips named (narration cut
+                                 into pieces: name them all), in every clip with sound on track N, or
+                                 in what sounds from T to T (with --track: on that track only). Lines
+                                 of up to N words (6), each word lighting up as it is said (--plain:
+                                 whole lines). Each caption is a title to edit.
                                  Where the clip reads the story's script, the words are written as the
                                  script has them, at the times they were heard (--heard: as heard)
   captions --file subtitles.srt  captions from an .srt or .vtt file
@@ -124,8 +127,10 @@ Scenes (animation and diagrams: layers of shapes, lines, paths and words that mo
   scene sheet --media M <file.png> [--every S]
                                  frames across the scene in a grid, each with its time: see the motion
   scene frame --media M [T] <file.png>     the scene alone at T seconds into it
-  scene patch --media M [--layer NAME] --json '{"text": "Plan"}' [--wait]
-                                 merge into one named layer (or the scene); null removes a field
+  scene patch --media M [--layer NAME | --match-text WORDS | --index N] --json '{"text": "Plan"}' [--wait]
+                                 merge into one layer (or the scene); null removes a field. The layer
+                                 by its name, by the text it shows (all of it, or a part only one
+                                 layer has), or by its `index` in `scene read`'s outline
   scene add --media M --add '{"type": "text", …}' [--into NAME] [--wait]
                                  add a layer on top, or inside the group or shape NAME
   scene remove --media M --remove NAME [--wait]
@@ -616,6 +621,9 @@ fn build(args: &[String]) -> Result<Value, String> {
             | "--mode" | "--tool" | "--refs" | "--job" | "--aspect" | "--layer" | "--into" | "--remove" | "--json"
             | "--add" | "--title" | "--story" | "--capture" | "--region" | "--note" | "--script" => {
                 request.insert(arg[2..].into(), json!(value(next(arg)?)?));
+            }
+            "--match-text" => {
+                request.insert("match_text".into(), json!(value(next(arg)?)?));
             }
             "--file" => {
                 let file = next(arg)?;

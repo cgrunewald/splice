@@ -186,6 +186,9 @@ splice ctl keyframe --clip 7 --at 14 --drop                # or --clear for all 
 ```sh
 splice ctl captions --clip 3 --wait        # hear what is said; captions on a new track
 splice ctl captions --clip 3 --words 4 --plain --wait   # shorter lines, appearing whole
+splice ctl captions --clip 31,32,33 --wait # narration cut into pieces: one set of captions, timeline times
+splice ctl captions --track 5 --wait       # every clip with sound on the narration's track
+splice ctl captions --track 5 --from 60 --to 90 --wait   # only what is said in that stretch
 splice ctl captions --file talk.srt        # or from a subtitle file (.srt, .vtt)
 splice ctl text --text "Three things" --animate rise --by word --over 1.2
 splice ctl style --clip 12 --animate pop --by letter     # --animate none: all at once
@@ -196,6 +199,12 @@ splice ctl style --clip 12 --animate pop --by letter     # --animate none: all a
   model downloads (the person sees a note). Read the captions back (`read`)
   and fix misheard words with `style --clip C --text …`; a caption's word
   timings stay with it as long as the number of words does not change.
+- Narration cut into several clips is captioned in one go: name them all
+  (`--clip A,B,C`), or their track (`--track N`), or a stretch (`--from T
+  --to T`, with `--track` to keep to the narration; without it every clip
+  that sounds there is heard, music too). Each clip is heard where it now
+  lies, so captions land at timeline times on one new track; the reply's
+  `heard` lists the clips. Never run whisper yourself and map times by hand.
 - When the story has a script and the clip is a reading of it, captions are
   written as the script has them (spelling, capitals, punctuation) at the
   times the words were heard; the reply's `scripted_beats` says how many
@@ -287,6 +296,8 @@ splice ctl scene read --media 23                     # outline, warnings, its JS
 splice ctl scene sheet --media 23 /tmp/sheet.png     # frames across it in a grid, timed: SEE the motion
 splice ctl scene frame --media 23 1.5 /tmp/f.png     # one frame of the scene alone
 splice ctl scene patch --media 23 --layer title --json '{"text": "Q3", "fill": "#f2c14e"}' --wait
+splice ctl scene patch --media 23 --match-text "not your title" --json '{"text": "It is not your role"}' --wait
+splice ctl scene patch --media 23 --index 4 --json '{"fill": "#f2c14e"}' --wait   # `index` from scene read's outline
 splice ctl scene add --media 23 --into steps --add '{"type": "rect", "name": "four", …}' --wait
 splice ctl scene remove --media 23 --remove four --wait
 splice ctl scene write --media 23 --file scene.json --wait    # replace it all; also --duration, --opaque

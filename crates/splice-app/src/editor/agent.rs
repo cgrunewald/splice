@@ -502,6 +502,61 @@ impl Editor {
                 self.say_how_placed(&mut reply, &was, &[(copy, track)]);
                 reply
             }
+            "sync" => {
+                // The media named, or the media of the clips named.
+                let ids: Vec<MediaId> = if request.get("media").is_some() {
+                    match self.find_media(&request["media"]) {
+                        Ok(m) => vec![m],
+                        Err(e) => return Some(fail(e)),
+                    }
+                } else {
+                    match self.clips(request) {
+                        Ok(clips) => {
+                            let mut m: Vec<MediaId> = clips
+                                .iter()
+                                .filter_map(|c| self.doc.project.clip(*c))
+                                .map(|c| c.media)
+                                .collect();
+                            m.dedup();
+                            m
+                        }
+                        Err(_) => {
+                            return Some(fail(
+                                "name the camera's media with --media M, or a clip of it with --clip C",
+                            ));
+                        }
+                    }
+                };
+                let Some(offset) = request.get("offset").and_then(Value::as_f64).filter(|o| o.abs() <= 5.0) else {
+                    return Some(fail(
+                        "say how far the picture runs behind the sound with --offset SECONDS (0.12; less than 0 if it \
+                         runs ahead; 0 to undo), at most 5",
+                    ));
+                };
+                let project = &self.doc.project;
+                if let Some(m) = ids
+                    .iter()
+                    .filter_map(|m| project.media(*m))
+                    .find(|m| m.kind != MediaKind::Video)
+                {
+                    return Some(fail(format!(
+                        "{} is not a video: only a picture can run behind its sound",
+                        m.name
+                    )));
+                }
+                let offset = from_secs(offset);
+                self.edit(cx, |p| {
+                    for m in p.media.iter_mut().filter(|m| ids.contains(&m.id)) {
+                        m.sync = offset;
+                    }
+                });
+                let media: Vec<Value> = ids
+                    .iter()
+                    .filter_map(|id| self.doc.project.media(*id))
+                    .map(|m| json!({ "id": m.id.0, "name": m.name, "sync": s(m.sync) }))
+                    .collect();
+                self.edited_with(json!({ "media": media }))
+            }
             "volume" => {
                 let ids = match self.clips(request) {
                     Ok(ids) => ids,
@@ -1378,6 +1433,7 @@ impl Editor {
                     "made": m.recipe.as_ref().map(|r| r.kind()),
                     "rendering": self.render_of(m.id).map(|r| r.progress()),
                     "render_error": self.made.errors.get(&m.id),
+                    "sync": (m.sync != 0).then(|| s(m.sync)),
                 })
             })
             .collect();

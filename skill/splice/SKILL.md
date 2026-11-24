@@ -98,6 +98,7 @@ splice ctl remove-time --from 40 --to 41.2          # take a stretch out of ever
 splice ctl duplicate --clip 3
 splice ctl duplicate --clip 3 --to 82.6 --track 8 --source-in 12.4 --for 1.5   # a copy made where it goes
 splice ctl volume --clip 9 --value 0.4              # 1 as recorded, 0 silent
+splice ctl sync --media camera --offset 0.12         # the camera's picture lags the voice by 0.12s
 splice ctl clean --clip 9 --noise 0.6 --even        # clean up a voice (--off to undo)
 splice ctl track --track 2 --mute --hide            # --unmute, --show
 splice ctl canvas --aspect 9:16                     # or --size 1080x1920, --fps 30
@@ -108,6 +109,10 @@ splice ctl undo
   whose bytes match media already in the project (a re-render that came out
   the same) reuses that media under its old name, marked `reused`;
   `--separate` keeps it as an entry of its own.
+- If lips trail the voice in a camera take, set the camera video's `sync`
+  (how far its picture runs behind the sound, usually 0.1–0.2 s) rather
+  than trimming each camera clip. Every clip of it follows, and nothing
+  moves on the timeline. Check a frame where a word starts.
 - Clips on one track never overlap. A clip placed or moved where there is no
   room rises to the first free track above; the reply shows where it landed,
   and lists it under `rose` (it now covers the layers between: check it is

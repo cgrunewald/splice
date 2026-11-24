@@ -683,6 +683,7 @@ impl Editor {
                                 content: None,
                                 // A screen recording's clicks, noted beside it.
                                 clicks: crate::recorder::read_clicks(&path),
+                                sync: 0,
                             },
                         );
                         if known == Some(id) {

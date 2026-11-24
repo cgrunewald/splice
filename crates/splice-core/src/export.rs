@@ -763,7 +763,12 @@ fn build(
                     picture = format!("p{tag}");
                 }
 
-                if sounds_out && let (Some(shared), Some(media)) = (shared, audio_media) {
+                // Its sound, from the input its picture opened; or, when the
+                // picture is read from elsewhere in the file (`sync`), its own.
+                if sounds_out
+                    && let Some(media) = audio_media
+                    && (shared.is_some() || media.sync != 0)
+                {
                     sounds.push(clip_sound(
                         &mut filters,
                         &mut args,
@@ -771,7 +776,7 @@ fn build(
                         resolve,
                         clip,
                         media,
-                        Some(shared),
+                        shared,
                         project.sound(clip),
                         &tag,
                     )?);
@@ -1170,6 +1175,17 @@ fn clip_frames(
         }
         Source::Media(media) => media,
     };
+    // A picture that runs behind its sound is shown from later in the file.
+    let synced;
+    let clip = if media.sync != 0 && media.kind == MediaKind::Video {
+        synced = Clip {
+            source_in: clip.source_in + media.sync,
+            ..clip.clone()
+        };
+        &synced
+    } else {
+        clip
+    };
     let path = resolve
         .media(media)
         .ok_or_else(|| format!("{} is offline", media.name))?
@@ -1252,7 +1268,9 @@ fn clip_frames(
         return Ok(Frames {
             label,
             rendered: None,
-            shared: Some((i, lo)),
+            // Its sound reads the same input, unless the picture is read
+            // from elsewhere in the file.
+            shared: (media.sync == 0).then_some((i, lo)),
         });
     }
     // Backwards: the latest piece first, each reversed on its own into a
@@ -1503,6 +1521,7 @@ mod tests {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         })
     }
 
@@ -1528,6 +1547,7 @@ mod tests {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         });
         let clip = p.append_clip(v).unwrap();
         p.clip_mut(clip).unwrap().clean = Some(crate::voice::Clean::default());

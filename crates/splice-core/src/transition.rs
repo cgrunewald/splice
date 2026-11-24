@@ -289,6 +289,7 @@ mod tests {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         });
         let a = p.append_clip(m).unwrap();
         let b = p.append_clip(m).unwrap();

@@ -763,6 +763,7 @@ mod tests {
                 recipe: None,
                 content: None,
                 clicks: Vec::new(),
+                sync: 0,
             })
         };
         let (camera, mic) = (media("camera", MediaKind::Video), media("mic", MediaKind::Audio));

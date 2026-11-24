@@ -91,6 +91,7 @@ fn ramp_with_sound(dir: &Path, hash: &str, colour: bool, sound: f64) -> Option<M
         recipe: None,
         content: None,
         clicks: Vec::new(),
+        sync: 0,
     })
 }
 
@@ -489,6 +490,7 @@ fn bars(dir: &Path, hash: &str, w: u32, h: u32) -> Option<Media> {
         recipe: None,
         content: None,
         clicks: Vec::new(),
+        sync: 0,
     })
 }
 
@@ -649,4 +651,34 @@ fn cuts_between_frames_leave_no_frame_empty() {
     for (n, level) in frames.iter().enumerate() {
         assert_eq!(*level > 30.0, n >= opens, "frame {n} measures {level}: {frames:?}");
     }
+}
+
+#[test]
+fn a_picture_behind_its_sound_is_shown_from_later() {
+    let dir = scratch("sync");
+    let media = needs_ffmpeg!(dir, "ramp", false);
+    let mut p = project();
+    let m = p.add_media(media);
+    // Source 1 s to 4 s, its picture half a second behind its sound.
+    let clip = p.append_clip(m).unwrap();
+    p.trim_start(clip, SECOND);
+    p.trim_end(clip, 4 * SECOND);
+    p.move_clips(&[clip], -SECOND, 0);
+    assert_eq!(p.clip(clip).map(|c| (c.start, c.duration)), Some((0, 3 * SECOND)));
+    let plain = render(&p, &dir, "unsynced");
+    assert!(
+        near(brightness(&plain, 0.5), level(1.5), 8.0),
+        "{}",
+        brightness(&plain, 0.5)
+    );
+    p.media.iter_mut().find(|x| x.id == m).unwrap().sync = SECOND / 2;
+    let out = render(&p, &dir, "synced");
+    assert!(near(duration(&out), 3.0, 0.1), "{}", duration(&out));
+    // The picture is half a second further on; the sound is still there.
+    assert!(
+        near(brightness(&out, 0.5), level(2.0), 8.0),
+        "{}",
+        brightness(&out, 0.5)
+    );
+    assert!(loudness(&out, 1.0) > -40.0, "{}", loudness(&out, 1.0));
 }

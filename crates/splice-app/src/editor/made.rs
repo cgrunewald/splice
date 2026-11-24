@@ -84,6 +84,7 @@ impl Editor {
             recipe: Some(recipe),
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         }
     }
 

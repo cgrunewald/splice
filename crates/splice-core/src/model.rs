@@ -65,6 +65,23 @@ pub struct Media {
     /// For a screen recording: where and when the mouse was clicked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clicks: Vec<Click>,
+    /// How far its picture runs behind its sound (a camera's latency):
+    /// every clip of it shows the picture this much later in the file, so
+    /// lips meet the voice. Less than 0: the picture runs ahead.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sync: Time,
+}
+
+fn is_zero(t: &Time) -> bool {
+    *t == 0
+}
+
+impl Media {
+    /// The moment of its file a clip shows at source time `t`: `t`, moved
+    /// by the picture's lag (`sync`), and kept inside the file.
+    pub fn picture_at(&self, t: Time, frame: Time) -> Time {
+        (t + self.sync).clamp(0, (self.duration - frame).max(0))
+    }
 }
 
 /// A mouse click in a screen recording: when (source time), and where, as
@@ -1524,6 +1541,7 @@ mod tests {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         }
     }
 

@@ -343,7 +343,22 @@ impl Editor {
                     }
                 });
                 let clips: Vec<Value> = ids.iter().map(|id| self.clip_json(*id)).collect();
-                self.edited_with(json!({ "clips": clips }))
+                let mut reply = self.edited_with(json!({ "clips": clips }));
+                let clamped: Vec<Value> = ids
+                    .iter()
+                    .flat_map(|id| {
+                        [("start", start), ("end", end)]
+                            .into_iter()
+                            .filter_map(|(edge, asked)| self.trim_stopped(*id, edge, asked?))
+                    })
+                    .collect();
+                if !clamped.is_empty() {
+                    reply["clamped"] = json!(clamped);
+                    let note = "an edge stopped short of where it was asked to go: see `clamped`";
+                    reply["note"] = json!(note);
+                    reply["warnings"] = json!([note]);
+                }
+                reply
             }
             "split" => {
                 let at = match self.time(request, "at") {
@@ -444,9 +459,47 @@ impl Editor {
                     Ok(ids) => ids,
                     Err(e) => return Some(fail(e)),
                 };
-                let copies = self.edit(cx, |p| p.duplicate(&ids));
-                let clips: Vec<Value> = copies.iter().map(|id| self.clip_json(*id)).collect();
-                self.edited_with(json!({ "new": clips }))
+                let placed = ["to", "track", "source_in", "for"]
+                    .iter()
+                    .any(|k| request.get(*k).is_some());
+                if !placed {
+                    let copies = self.edit(cx, |p| p.duplicate(&ids));
+                    let clips: Vec<Value> = copies.iter().map(|id| self.clip_json(*id)).collect();
+                    return Some(self.edited_with(json!({ "new": clips })));
+                }
+                // Made where it is wanted, in one step.
+                let [id] = ids[..] else {
+                    return Some(fail(
+                        "--to, --track, --source-in and --for place one copy: name one clip",
+                    ));
+                };
+                let slot = self.doc.project.slot(id).expect("named clips exist");
+                let original = self.doc.project.clip(id).expect("named clips exist");
+                let (original_end, original_length) = (original.end(), original.duration);
+                let to = match self.time(request, "to") {
+                    Ok(t) => t.unwrap_or(original_end),
+                    Err(e) => return Some(fail(e)),
+                };
+                let track = self.track(request).unwrap_or(slot.track);
+                let source_in = match self.time(request, "source_in") {
+                    Ok(t) => t,
+                    Err(e) => return Some(fail(e)),
+                };
+                let duration = request.get("for").and_then(Value::as_f64).map(from_secs);
+                if duration.is_some_and(|d| d <= 0) {
+                    return Some(fail("--for is a length in seconds"));
+                }
+                let lengths = self.lengths();
+                let made = self.edit(cx, |p| p.duplicate_to(id, to, track, source_in, duration));
+                let copy = match made {
+                    Ok(copy) => copy,
+                    Err(e) => return Some(fail(format!("cannot copy clip {} like that: {e}", id.0))),
+                };
+                let want = duration.unwrap_or(original_length);
+                let mut reply = self.edited_with(json!({ "new": [self.clip_json(copy)] }));
+                let was = lengths.into_iter().chain([(copy, want)]).collect::<Vec<_>>();
+                self.say_how_placed(&mut reply, &was, &[(copy, track)]);
+                reply
             }
             "volume" => {
                 let ids = match self.clips(request) {
@@ -1097,6 +1150,37 @@ impl Editor {
             });
         }
         value
+    }
+
+    /// Where a trimmed edge stopped short of `asked` (more than half a frame
+    /// off), and what stopped it: the clip beside it, the media's own start
+    /// or end, or the shortest a clip can be.
+    fn trim_stopped(&self, id: ClipId, edge: &str, asked: Time) -> Option<Value> {
+        let project = &self.doc.project;
+        let frame = project.frame();
+        let slot = project.slot(id)?;
+        let clips = &project.tracks[slot.track].clips;
+        let clip = &clips[slot.index];
+        let got = if edge == "start" { clip.start } else { clip.end() };
+        if (got - asked).abs() <= frame / 2 {
+            return None;
+        }
+        let by = if edge == "start" {
+            let before = slot.index.checked_sub(1).map(|i| &clips[i]);
+            match before {
+                _ if got >= clip.end() - frame => "the shortest a clip can be (a frame)".to_string(),
+                Some(b) if b.end() == got => format!("clip {} before it on the track", b.id.0),
+                _ if got == 0 => "the start of the timeline".to_string(),
+                _ => "the start of its media".to_string(),
+            }
+        } else {
+            match clips.get(slot.index + 1) {
+                _ if got <= clip.start + frame => "the shortest a clip can be (a frame)".to_string(),
+                Some(n) if n.start == got => format!("clip {} after it on the track", n.id.0),
+                _ => "the end of its media".to_string(),
+            }
+        };
+        Some(json!({ "clip": id.0, "edge": edge, "asked": s(asked), "got": s(got), "by": by }))
     }
 
     /// How long every clip is, to tell afterwards which an edit cut short.

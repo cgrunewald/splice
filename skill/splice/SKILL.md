@@ -164,6 +164,8 @@ splice ctl transition --all --kind dip-black --track 1     # every cut on the bo
 splice ctl transition --clip 8 --none
 splice ctl speed --clip 5 --rate 2                         # twice as fast: half as long
 splice ctl speed --clip 5 --rate 0.5 --reverse             # slow and backwards (--forwards undoes)
+splice ctl speed --clip 5 --for 6.4 --ripple all           # last exactly 6.4s; every track after it moves along
+splice ctl speed --clip 5 --for 6.4 --ripple none          # fit it in place; nothing else moves
 splice ctl freeze --clip 5 --at 12.4 --for 2               # hold that frame for 2s
 splice ctl keyframe --clip 7 --at 10 --scale 1 --x 0       # keyframes at timeline times
 splice ctl keyframe --clip 7 --at 14 --scale 1.4 --x 0.1 --ease in-out
@@ -177,9 +179,14 @@ splice ctl keyframe --clip 7 --at 14 --drop                # or --clear for all 
   dissolve, dip-black, dip-white, wipe-left/right/up/down,
   push-left/right/up/down, zoom. Use them sparingly: a dissolve for time
   passing, a dip to black between sections, cuts everywhere else.
-- `speed` keeps the stretch of source and changes the clip's length; later
-  clips on the same track move to match, other tracks do not, so check that
-  music and titles above still line up (`read`). Sound keeps its pitch.
+- `speed` keeps the stretch of source and changes the clip's length. By
+  default later clips on the same track move to match and other tracks do
+  not. On a cut that is in sync with a voice, use `--ripple all`: every
+  track after the clip moves along, and clips that span the cut (music, a
+  backdrop) stay. `--ripple none` leaves everything else where it is; a clip
+  slowed into the next one ends where that starts (`cut_short` in the
+  reply). The reply's `moved` lists what moved. Use `--for S` rather than
+  working out a rate, to fill a slot exactly. Sound keeps its pitch.
   A held frame (`freeze`) is silent and stretches like a picture.
 - Effects (`look`): `--blur`, `--vignette`, `--grain`, `--shake`, `--glitch`,
   each 0 to 1. `--backdrop on` fills the canvas behind a picture with a

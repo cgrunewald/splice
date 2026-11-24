@@ -356,6 +356,11 @@ impl Editor {
                     Ok(ids) => ids,
                     Err(e) => return Some(fail(e)),
                 };
+                if request.get("ripple").is_some_and(Value::is_string) {
+                    return Some(fail(
+                        "delete --ripple takes no value: it closes the gap on each clip's track",
+                    ));
+                }
                 if flag("ripple") == Some(true) {
                     self.edit(cx, |p| p.ripple_delete(&ids));
                 } else {

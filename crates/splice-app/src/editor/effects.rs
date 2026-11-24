@@ -253,7 +253,32 @@ impl Editor {
                         return fail(format!("clip {} is a held frame; drag or trim it to hold longer", id.0));
                     }
                 }
-                let rate = number("rate");
+                let ripple = match request.get("ripple") {
+                    None => Some(splice_core::model::Ripple::Track),
+                    Some(v) => v.as_str().and_then(splice_core::model::Ripple::parse),
+                };
+                let Some(ripple) = ripple else {
+                    return fail("--ripple is track (what follows on its track), all (every track) or none");
+                };
+                // `--for S`: the rate that makes the clip last S.
+                let rate = match (number("rate"), number("for")) {
+                    (Some(_), Some(_)) => return fail("say --rate or --for, not both"),
+                    (None, Some(secs)) => {
+                        if named.len() != 1 {
+                            return fail("--for retimes one clip: name one with --clip");
+                        }
+                        let clip = project.clip(named[0]).expect("named clips exist");
+                        let frame = project.frame();
+                        let fps = project.settings.fps;
+                        let want =
+                            splice_core::time::floor_to_frame(splice_core::time::from_secs(secs) + frame / 2, fps);
+                        if want < frame {
+                            return fail("--for is at least a frame");
+                        }
+                        Some(clip.span() as f64 / want as f64)
+                    }
+                    (rate, None) => rate,
+                };
                 if let Some(r) = rate
                     && !(splice_core::model::SLOWEST..=splice_core::model::FASTEST).contains(&r)
                 {
@@ -265,17 +290,38 @@ impl Editor {
                 }
                 let reverse = request.get("reverse").and_then(Value::as_bool);
                 if rate.is_none() && reverse.is_none() {
-                    return fail("say how: --rate R and/or --reverse | --forwards");
+                    return fail("say how: --rate R or --for S, and/or --reverse | --forwards");
                 }
-                self.edit(cx, |p| {
-                    if let Some(r) = rate {
-                        p.set_speed(&named, r);
-                    }
+                let retimed = self.edit(cx, |p| {
+                    let retimed = rate
+                        .map(|r| p.set_speed_rippling(&named, r, ripple))
+                        .unwrap_or_default();
                     if let Some(back) = reverse {
                         p.set_reverse(&named, back);
                     }
+                    retimed
                 });
-                reply(self, &named)
+                let mut answer = reply(self, &named);
+                let ids = |ids: &[ClipId]| json!(ids.iter().map(|c| c.0).collect::<Vec<_>>());
+                answer["moved"] = ids(&retimed.moved);
+                let mut notes = Vec::new();
+                if !retimed.cut_short.is_empty() {
+                    answer["cut_short"] = ids(&retimed.cut_short);
+                    notes.push(
+                        "slowed into the clip after it: it ends where that one starts and plays less of its source",
+                    );
+                }
+                if !retimed.held.is_empty() {
+                    answer["gap_after"] = ids(&retimed.held);
+                    notes.push(
+                        "what follows could not move up on every track (the clip before it on another track is in \
+                         the way): a gap is left after it",
+                    );
+                }
+                if !notes.is_empty() {
+                    answer["note"] = json!(notes.join("; "));
+                }
+                answer
             }
             "freeze" => {
                 let [id] = named[..] else {

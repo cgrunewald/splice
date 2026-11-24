@@ -877,6 +877,13 @@ fn build(
 
     // A long graph (many captions) goes in a file: the command line has a limit.
     let graph = filters.join(";");
+    // Each filter gets a pool of threads as large as the graph's thread
+    // count, which is the number of cores unless told. A graph of thousands
+    // of filters then runs into the system's limit on threads per process
+    // (16,384 on macOS), and ffmpeg's scalers fail to start.
+    if let Some(threads) = filter_threads(&graph) {
+        args.extend(strings(&["-filter_complex_threads", &threads.to_string()]));
+    }
     if graph.len() > 64 * 1024 {
         let file = prepare.dir.join("graph.txt");
         prepare.files.push((file.clone(), graph));
@@ -1417,6 +1424,28 @@ fn clip_sound(
 }
 
 /// Reads one line of `-progress` output; returns the encoded position.
+/// Threads that ffmpeg's filters may start in all, kept well under the
+/// system's limit per process so the rest of ffmpeg has room too.
+const FILTER_THREAD_BUDGET: usize = 6144;
+
+/// How many threads a graph this size may give each filter, or `None` when
+/// ffmpeg's own choice (one per core) fits under the budget.
+fn filter_threads(graph: &str) -> Option<usize> {
+    let cores = std::thread::available_parallelism().map_or(8, |n| n.get());
+    threads_for(filter_count(graph), cores)
+}
+
+fn threads_for(filters: usize, cores: usize) -> Option<usize> {
+    let threads = (FILTER_THREAD_BUDGET / filters.max(1)).max(1);
+    (threads < cores).then_some(threads)
+}
+
+/// Roughly how many filters a graph holds. Commas inside expressions are
+/// counted too, so it errs high, which errs toward fewer threads.
+fn filter_count(graph: &str) -> usize {
+    graph.matches([',', ';']).count() + 1
+}
+
 pub fn parse_progress(line: &str) -> Option<Time> {
     let value = line
         .strip_prefix("out_time_us=")
@@ -1658,6 +1687,33 @@ mod tests {
     #[test]
     fn empty_timeline_is_an_error() {
         assert!(plan(&Project::default(), &Fake, Path::new("/o.mp4"), Quality::Draft).is_err());
+    }
+
+    #[test]
+    fn a_huge_graph_gives_each_filter_few_threads() {
+        // A small graph is left to ffmpeg: one thread per core.
+        assert_eq!(threads_for(200, 18), None);
+        // Thousands of filters (a long movie of karaoke captions) at 18
+        // threads each would pass macOS's 16,384 threads per process.
+        // That graph exported once capped at 2 threads a filter.
+        assert_eq!(threads_for(2292, 18), Some(2));
+        assert_eq!(threads_for(1000, 18), Some(6));
+        assert_eq!(threads_for(100_000, 8), Some(1));
+        assert_eq!(filter_count("[0:v]scale=2:2,format=rgba[a];[a]null[b]"), 3);
+
+        let mut p = Project::default();
+        let v = video(&mut p, "a", 1);
+        p.append_clip(v).unwrap();
+        assert!(!plan_of(&p).args.contains(&"-filter_complex_threads".to_string()));
+        for _ in 0..800 {
+            p.append_clip(v).unwrap();
+        }
+        let args = plan_of(&p).args;
+        let at = args
+            .iter()
+            .position(|a| a == "-filter_complex_threads")
+            .expect("capped");
+        assert_eq!(args[at + 1], "1");
     }
 
     #[test]

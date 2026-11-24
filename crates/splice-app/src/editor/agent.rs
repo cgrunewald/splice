@@ -772,7 +772,7 @@ impl Editor {
                                 Ok(())
                             } else {
                                 let err = String::from_utf8_lossy(&out.stderr);
-                                Err(err.lines().last().unwrap_or("ffmpeg failed").to_string())
+                                Err(ffmpeg::first_error(&err, "ffmpeg failed"))
                             }
                         });
                     let answer = match result {

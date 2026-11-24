@@ -65,6 +65,8 @@ splice ctl read      # everything: media and every track and clip, with ids and 
   the project: add `--project NAME` (or its path) to every command, or run
   with `SPLICE_PROJECT=NAME`. The error lists the open projects; ask the
   user which one they mean if it is not clear.
+- `splice ctl <command> help` (`story help`, `symbol help`, `trim help`)
+  prints just that command's part of `splice ctl --help`.
 - Times are seconds. Tracks count from 1, the bottom layer; higher tracks
   draw over lower ones (that is how overlays work).
 - Clips have an `id`, a `media` id, `start`/`end` on the timeline,
@@ -107,6 +109,9 @@ splice ctl undo
   the cut, listed under `trimmed`.
 - `trim` keeps a video clip inside its media: you cannot extend it past the
   file's start or end. Images can be any length.
+- After `add` or `move`, check `warnings` in the reply: it is there only
+  when a clip landed somewhere other than asked (`trimmed`, `rose`,
+  `clamped`).
 - `split` returns the new right halves under `new`.
 - Read the reply: it has the clip as it ended up, the new `duration` and
   `revision`. If something failed, read again and retry once; if it fails

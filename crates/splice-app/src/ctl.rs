@@ -438,7 +438,8 @@ fn choose(wanted: Option<&str>) -> Result<PathBuf, String> {
         return match &open[..] {
             [only] => Ok(only.socket.clone()),
             _ => Err(format!(
-                "{} Splice windows are open: {}. Say which with --project NAME (or set SPLICE_PROJECT)",
+                "{} Splice windows are open: {}. Say which with --project NAME, or once for every command \
+                 with `export SPLICE_PROJECT=NAME` (NAME or the project's path)",
                 open.len(),
                 listing(&open)
             )),
@@ -863,6 +864,29 @@ fn build(args: &[String]) -> Result<Value, String> {
     Ok(Value::Object(request))
 }
 
+/// The lines of the usage about `command`: each line that starts with it,
+/// and the lines indented under each. `None` when no line does.
+fn help_for(command: &str) -> Option<String> {
+    let mut out = Vec::new();
+    let mut taking = false;
+    for line in USAGE.lines() {
+        let starts = line
+            .strip_prefix("  ")
+            .filter(|l| !l.starts_with(' '))
+            .and_then(|l| l.strip_prefix(command))
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', ':']));
+        if starts {
+            taking = true;
+            out.push(line);
+        } else if taking && line.starts_with("    ") {
+            out.push(line);
+        } else {
+            taking = false;
+        }
+    }
+    (!out.is_empty()).then(|| out.join("\n"))
+}
+
 /// The `splice ctl` command line. Returns the exit code.
 pub fn cli(args: &[String]) -> i32 {
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h" | "help") {
@@ -883,6 +907,16 @@ pub fn cli(args: &[String]) -> i32 {
     let args = &rest[..];
     if args.is_empty() {
         println!("{USAGE}");
+        return 0;
+    }
+    // `story help`, `symbol --help`…: that command's part of the usage. (A
+    // scene's help is the scene format, which the window answers.)
+    if let [group, ask, ..] = args
+        && matches!(ask.as_str(), "help" | "--help" | "-h")
+        && group != "scene"
+        && let Some(lines) = help_for(group)
+    {
+        println!("{lines}");
         return 0;
     }
     let request = match build(args) {
@@ -942,6 +976,21 @@ mod tests {
         assert_eq!(parse_time("1:00:00"), Some(3600.0));
         assert_eq!(parse_time("-1"), None);
         assert_eq!(parse_time("soon"), None);
+    }
+
+    #[test]
+    fn each_command_answers_help() {
+        let story = help_for("story").unwrap();
+        assert!(
+            story.lines().all(|l| l.starts_with("  story") || l.starts_with("    ")),
+            "{story}"
+        );
+        assert!(story.contains("story set") && story.lines().count() > 20);
+        let trim = help_for("trim").unwrap();
+        assert!(trim.starts_with("  trim --clip"));
+        // `text` is not `textmotion`, and a word that is no command has no help.
+        assert!(help_for("text").unwrap().lines().all(|l| !l.starts_with("  textm")));
+        assert_eq!(help_for("nonsense"), None);
     }
 
     #[test]

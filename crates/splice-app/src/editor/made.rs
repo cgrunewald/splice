@@ -740,6 +740,63 @@ impl Editor {
                     "file": scenes::workspace(scene).join(scenes::SOURCE),
                 }))
             }
+            ("scene", "stretch") => {
+                let media = match media(self, "scene") {
+                    Ok(m) => m,
+                    Err(e) => return Some(fail(e)),
+                };
+                let Some(Recipe::Scene(mut scene)) = media.recipe.clone() else {
+                    return None;
+                };
+                let at = match self.time(request, "at") {
+                    Ok(Some(t)) => t,
+                    Ok(None) => return Some(fail("say where in the scene with --at T (seconds into it)")),
+                    Err(e) => return Some(fail(e)),
+                };
+                let by = request
+                    .get("by")
+                    .and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()));
+                let Some(by) = by.filter(|b| b.is_finite() && *b != 0.0) else {
+                    return Some(fail("say how much with --by SECONDS (less than 0 takes time out)"));
+                };
+                if at > scene.duration {
+                    return Some(fail(format!(
+                        "--at is inside the scene: 0 to {:.2}s",
+                        splice_core::time::secs(scene.duration)
+                    )));
+                }
+                // Out: no more than there is after `at`, leaving a tenth of a second.
+                let by = splice_core::time::from_secs(by).max(-(scene.duration - at).min(scene.duration - SECOND / 10));
+                if by == 0 {
+                    return Some(fail("there is no time after --at to take out"));
+                }
+                let source = match splice_core::motion::stretch(
+                    &scene.source,
+                    splice_core::time::secs(at),
+                    splice_core::time::secs(by),
+                ) {
+                    Ok(source) => source,
+                    Err(e) => return Some(fail(e.to_string())),
+                };
+                scene.source = source;
+                scene.duration += by;
+                let id = media.id;
+                let spec = splice_core::motion::Spec::parse(&scene.source).ok();
+                let seconds = splice_core::time::secs(scene.duration);
+                let clips = self.edit(cx, |p| {
+                    // The clips first, measured against the scene as it was.
+                    let clips = p.stretch_clips_of(id, at, by);
+                    p.set_recipe(id, Recipe::Scene(scene));
+                    clips
+                });
+                let warnings = spec.map(|s| self.scene_warnings(&s, seconds)).unwrap_or_default();
+                let clips: Vec<Value> = clips.iter().map(|c| self.clip_json(*c)).collect();
+                answer(
+                    self,
+                    id,
+                    json!({ "warnings": warnings, "clips": clips, "duration": seconds }),
+                )
+            }
             ("scene", "write") => {
                 let media = match media(self, "scene") {
                     Ok(m) => m,

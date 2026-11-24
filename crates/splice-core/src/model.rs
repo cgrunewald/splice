@@ -707,6 +707,48 @@ impl Project {
         }
     }
 
+    /// Clips of made media that has had `by` of time put in at `at` of its
+    /// own time (taken out, when less than 0): a clip showing `at` gets
+    /// longer (or shorter) as far as the next clip allows, a clip showing
+    /// what comes after starts that much later in it, so each shows what it
+    /// did. Returns the clips that changed.
+    pub fn stretch_clips_of(&mut self, id: MediaId, at: Time, by: Time) -> Vec<ClipId> {
+        let frame = self.frame();
+        // Time put in at the very end holds the last moment: a clip that
+        // shows the end gets longer too.
+        let end = self.media(id).map_or(Time::MAX, |m| match &m.recipe {
+            Some(Recipe::Scene(scene)) => scene.duration.min(m.duration),
+            _ => m.duration,
+        });
+        let mut changed = Vec::new();
+        for track in &mut self.tracks {
+            let starts: Vec<Time> = track.clips.iter().map(|c| c.start).collect();
+            for clip in track
+                .clips
+                .iter_mut()
+                .filter(|c| c.media == id && c.generator.is_none() && !c.frozen && !c.reverse)
+            {
+                let timeline = |source: Time| (source as f64 / clip.speed).round() as Time;
+                if clip.source_in >= at {
+                    clip.source_in = (clip.source_in + by).max(at);
+                    changed.push(clip.id);
+                } else if clip.source_out() > at || (by > 0 && at >= end - frame && clip.source_out() >= end - frame) {
+                    let room = starts
+                        .iter()
+                        .copied()
+                        .filter(|s| *s > clip.start)
+                        .min()
+                        .map_or(Time::MAX, |s| s - clip.start);
+                    let gone = (at - by).min(clip.source_out()) - at;
+                    let more = if by >= 0 { timeline(by) } else { -timeline(gone.max(0)) };
+                    clip.duration = (clip.duration + more).min(room).max(frame);
+                    changed.push(clip.id);
+                }
+            }
+        }
+        changed
+    }
+
     /// Changes what made media is made from.
     pub fn set_recipe(&mut self, id: MediaId, recipe: Recipe) {
         if let Some(media) = self.media.iter_mut().find(|m| m.id == id) {
@@ -1484,6 +1526,32 @@ mod tests {
         let r = p.set_speed_rippling(&[b], 2.0, Ripple::None);
         assert_eq!(p.clip(b).unwrap().duration, 2 * SECOND);
         assert!(r.moved.is_empty() && r.cut_short.is_empty());
+    }
+
+    #[test]
+    fn clips_of_a_stretched_scene_show_what_they_did() {
+        let (mut p, m) = project_with(10 * SECOND);
+        // The whole scene, then a second use of its last 4s.
+        let whole = p.insert_clip(m, 0, 0).unwrap();
+        let tail = p.insert_clip(m, 1, 0).unwrap();
+        p.trim_start(tail, 6 * SECOND);
+        let changed = p.stretch_clips_of(m, 5 * SECOND, 2 * SECOND);
+        assert_eq!(changed.len(), 2);
+        let c = p.clip(whole).unwrap();
+        assert_eq!((c.start, c.duration, c.source_in), (0, 12 * SECOND, 0));
+        let c = p.clip(tail).unwrap();
+        assert_eq!((c.start, c.duration, c.source_in), (6 * SECOND, 4 * SECOND, 8 * SECOND));
+
+        // Put in at the very end: the whole use holds its last moment longer.
+        let (mut q, n) = project_with(10 * SECOND);
+        let all = q.insert_clip(n, 0, 0).unwrap();
+        q.stretch_clips_of(n, 10 * SECOND, 3 * SECOND);
+        assert_eq!(q.clip(all).unwrap().duration, 13 * SECOND);
+
+        // Taken out again: back as they were.
+        p.stretch_clips_of(m, 5 * SECOND, -2 * SECOND);
+        assert_eq!(p.clip(whole).unwrap().duration, 10 * SECOND);
+        assert_eq!(p.clip(tail).unwrap().source_in, 6 * SECOND);
     }
 
     #[test]

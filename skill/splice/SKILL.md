@@ -100,7 +100,11 @@ splice ctl undo
 ```
 
 - Clips on one track never overlap. A clip placed or moved where there is no
-  room rises to the first free track above; the reply shows where it landed.
+  room rises to the first free track above; the reply shows where it landed,
+  and lists it under `rose` (it now covers the layers between: check it is
+  where you meant). A clip only a frame or less over its neighbour (times
+  rounded to frames) does not rise: the earlier of the two is cut to end at
+  the cut, listed under `trimmed`.
 - `trim` keeps a video clip inside its media: you cannot extend it past the
   file's start or end. Images can be any length.
 - `split` returns the new right halves under `new`.
@@ -191,6 +195,9 @@ splice ctl keyframe --clip 7 --at 14 --drop                # or --clear for all 
 ```sh
 splice ctl captions --clip 3 --wait        # hear what is said; captions on a new track
 splice ctl captions --clip 3 --words 4 --plain --wait   # shorter lines, appearing whole
+splice ctl captions --clip 31,32,33 --wait # narration cut into pieces: one set of captions, timeline times
+splice ctl captions --track 5 --wait       # every clip with sound on the narration's track
+splice ctl captions --track 5 --from 60 --to 90 --wait   # only what is said in that stretch
 splice ctl captions --file talk.srt        # or from a subtitle file (.srt, .vtt)
 splice ctl text --text "Three things" --animate rise --by word --over 1.2
 splice ctl style --clip 12 --animate pop --by letter     # --animate none: all at once
@@ -201,6 +208,12 @@ splice ctl style --clip 12 --animate pop --by letter     # --animate none: all a
   model downloads (the person sees a note). Read the captions back (`read`)
   and fix misheard words with `style --clip C --text …`; a caption's word
   timings stay with it as long as the number of words does not change.
+- Narration cut into several clips is captioned in one go: name them all
+  (`--clip A,B,C`), or their track (`--track N`), or a stretch (`--from T
+  --to T`, with `--track` to keep to the narration; without it every clip
+  that sounds there is heard, music too). Each clip is heard where it now
+  lies, so captions land at timeline times on one new track; the reply's
+  `heard` lists the clips. Never run whisper yourself and map times by hand.
 - When the story has a script and the clip is a reading of it, captions are
   written as the script has them (spelling, capitals, punctuation) at the
   times the words were heard; the reply's `scripted_beats` says how many
@@ -292,6 +305,8 @@ splice ctl scene read --media 23                     # outline, warnings, its JS
 splice ctl scene sheet --media 23 /tmp/sheet.png     # frames across it in a grid, timed: SEE the motion
 splice ctl scene frame --media 23 1.5 /tmp/f.png     # one frame of the scene alone
 splice ctl scene patch --media 23 --layer title --json '{"text": "Q3", "fill": "#f2c14e"}' --wait
+splice ctl scene patch --media 23 --match-text "not your title" --json '{"text": "It is not your role"}' --wait
+splice ctl scene patch --media 23 --index 4 --json '{"fill": "#f2c14e"}' --wait   # `index` from scene read's outline
 splice ctl scene add --media 23 --into steps --add '{"type": "rect", "name": "four", …}' --wait
 splice ctl scene remove --media 23 --remove four --wait
 splice ctl scene write --media 23 --file scene.json --wait    # replace it all; also --duration, --opaque
@@ -398,6 +413,7 @@ the story carries the footage along.
 splice ctl story read                                  # beats with ids, times, coverage, clips; cues
 splice ctl story add --title "Hook" --duration 4 --story "Why care" --capture "Close on the app"
 splice ctl story set --beat 27 --duration 6 --capture "Screen: open the inspector"
+splice ctl story set --beat 27 --duration 6 --board-only   # the plan alone; no clip moves
 splice ctl story move --beat 29 --index 0              # its footage, and everyone's, follows
 splice ctl story fill --beat 27 --media intro.mov      # lay media in at the beat's start, trimmed to fit
 splice ctl story remove --beat 28                      # footage stays where it is
@@ -409,6 +425,12 @@ splice ctl cue add --at 9 --label "music lifts"
 splice ctl view story                                  # show the person the board
 ```
 
+- A new `--duration` moves every clip that starts at or after the beat's old
+  end, on all tracks, by the same amount, so layers stay in step; the reply
+  lists them in `moved` with the `shift` in seconds. A clip that runs on
+  past the beat's end (music under the whole video) stays. On a finished
+  edit whose plan has gone stale, use `--board-only`: it changes the plan
+  and moves nothing.
 - Draft the story with the person before cutting: a few beats, each with what
   happens and what to capture. Fit durations to the music or voice-over.
 - Give each beat reference shots: a picture (any image, or a frame of a

@@ -27,6 +27,10 @@ Media
 Editing (each is one undo step; clips and media are named by id, media also by name)
   add --media M [--at T] [--track N]       put media on the timeline (default: the end of track N)
   move --clip C [--to T] [--track N]       move a clip in time or to another layer
+                                 (add, move: a clip a frame or less over its neighbour on the track
+                                 meets it, the earlier one cut to end there: `trimmed` in the reply.
+                                 Over it by more, it goes to the first free track above, where it
+                                 covers the layers between: `rose` in the reply)
   trim --clip C [--start T] [--end T]      move a clip's left or right edge to T
   split [--at T] [--clip C]                cut at T (default: the playhead) every clip under it, or C
   delete --clip C [--ripple]               remove clips; --ripple closes the gap
@@ -95,10 +99,13 @@ Transitions, speed and keyframes
   zoom --clip C [--to 2] | --none          a screen recording made in Splice: zoom in towards each burst
                                  of clicks noted while recording (keyframes on place and size)
   leak --kind warm|sun|cool [--at T]       a light leak washing over what is there, 4s (a scene: edit as one)
-  captions --clip C [--words N] [--plain] [--heard] [--wait]
-                                 hear what is said in clip C (on this Mac, whisper.cpp) and lay captions
-                                 over it on a new track: lines of up to N words (6), each word lighting up
-                                 as it is said (--plain: whole lines). Each caption is a title to edit.
+  captions --clip C[,C…] | --track N | --from T --to T  [--words N] [--plain] [--heard] [--wait]
+                                 hear what is said (on this Mac, whisper.cpp) and lay captions over it
+                                 on one new track, at timeline times: in the clips named (narration cut
+                                 into pieces: name them all), in every clip with sound on track N, or
+                                 in what sounds from T to T (with --track: on that track only). Lines
+                                 of up to N words (6), each word lighting up as it is said (--plain:
+                                 whole lines). Each caption is a title to edit.
                                  Where the clip reads the story's script, the words are written as the
                                  script has them, at the times they were heard (--heard: as heard)
   captions --file subtitles.srt  captions from an .srt or .vtt file
@@ -124,8 +131,10 @@ Scenes (animation and diagrams: layers of shapes, lines, paths and words that mo
   scene sheet --media M <file.png> [--every S]
                                  frames across the scene in a grid, each with its time: see the motion
   scene frame --media M [T] <file.png>     the scene alone at T seconds into it
-  scene patch --media M [--layer NAME] --json '{"text": "Plan"}' [--wait]
-                                 merge into one named layer (or the scene); null removes a field
+  scene patch --media M [--layer NAME | --match-text WORDS | --index N] --json '{"text": "Plan"}' [--wait]
+                                 merge into one layer (or the scene); null removes a field. The layer
+                                 by its name, by the text it shows (all of it, or a part only one
+                                 layer has), or by its `index` in `scene read`'s outline
   scene add --media M --add '{"type": "text", …}' [--into NAME] [--wait]
                                  add a layer on top, or inside the group or shape NAME
   scene remove --media M --remove NAME [--wait]
@@ -170,7 +179,11 @@ Story (planning: beats end to end along the timeline, and cues)
   story list                     the plan as a shot list (plain text, in `text`)
   story add --title T [--duration D] [--after BEAT] [--story TEXT] [--capture TEXT]
   story set --beat B [--title T] [--story TEXT] [--capture TEXT] [--script TEXT] [--duration D] [--color C]
-                                 a new length moves the beats after it, footage and all
+            [--board-only]       a new length moves the beats after it, and every clip that starts at
+                                 or after the beat's old end with them: all tracks by the same amount,
+                                 each clip on its own track (`moved`, `shift` in the reply). Closing
+                                 up, they stop at footage that stays (`short_by`). --board-only changes
+                                 the plan alone and moves no clip: for a plan behind a finished edit
   story move --beat B --index I  put a beat at position I (from 0); every beat's footage follows
   story remove --beat B          take a beat out (its footage stays; later beats close up)
   story fill --beat B --media M  lay media into a beat: at its start, as long as the beat
@@ -613,6 +626,9 @@ fn build(args: &[String]) -> Result<Value, String> {
             | "--add" | "--title" | "--story" | "--capture" | "--region" | "--note" | "--script" => {
                 request.insert(arg[2..].into(), json!(value(next(arg)?)?));
             }
+            "--match-text" => {
+                request.insert("match_text".into(), json!(value(next(arg)?)?));
+            }
             "--file" => {
                 let file = next(arg)?;
                 request.insert("content".into(), json!(value(&format!("@{file}"))?));
@@ -635,7 +651,7 @@ fn build(args: &[String]) -> Result<Value, String> {
                 request.insert(arg[2..].into(), json!(v));
             }
             "--ripple" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam" | "--drop"
-            | "--plain" | "--replace" | "--heard" => {
+            | "--plain" | "--replace" | "--heard" | "--board-only" => {
                 request.insert(arg[2..].into(), json!(true));
             }
             "--done" | "--undone" => {

@@ -682,9 +682,23 @@ impl Editor {
                     serde_json::from_str(raw).map_err(|e| format!("--{key} is not JSON: {e}"))
                 };
                 let edited = match sub {
-                    "patch" => parse("json")
-                        .map_err(anyhow::Error::msg)
-                        .and_then(|p| splice_core::motion::patch(&scene.source, text("layer"), &p)),
+                    "patch" => {
+                        use splice_core::motion::Which;
+                        let index = request.get("index").and_then(Value::as_u64);
+                        let which = match (text("layer"), text("match_text"), index) {
+                            (Some(name), None, None) => Ok(Which::Named(name)),
+                            (None, Some(words), None) => Ok(Which::Saying(words)),
+                            (None, None, Some(n)) => Ok(Which::Numbered(n as usize)),
+                            (None, None, None) => Ok(Which::Scene),
+                            _ => Err(anyhow::anyhow!(
+                                "name the layer one way: --layer NAME, --match-text WORDS or --index N"
+                            )),
+                        };
+                        which.and_then(|which| {
+                            let patch = parse("json").map_err(anyhow::Error::msg)?;
+                            splice_core::motion::patch_which(&scene.source, which, &patch)
+                        })
+                    }
                     "add" => parse("add")
                         .map_err(anyhow::Error::msg)
                         .and_then(|l| splice_core::motion::add(&scene.source, l, text("into"))),

@@ -31,7 +31,8 @@ Editing (each is one undo step; clips and media are named by id, media also by n
                                  meets it, the earlier one cut to end there: `trimmed` in the reply.
                                  Over it by more, it goes to the first free track above, where it
                                  covers the layers between: `rose` in the reply)
-  trim --clip C [--start T] [--end T]      move a clip's left or right edge to T
+  trim --clip C [--start T] [--end T]      move a clip's left or right edge to T; an edge stopped
+                                 short (by the clip beside it, its media, a frame) is in `clamped`
   split [--at T] [--clip C]                cut at T (default: the playhead) every clip under it, or C
   delete --clip C [--ripple]               remove clips; --ripple closes the gap
   insert-time --at T --for D [--hold N,M]  put D seconds in at T on every track: what starts at or after T
@@ -41,6 +42,10 @@ Editing (each is one undo step; clips and media are named by id, media also by n
                                  keyframes and caption words keep their moments. Beats and cues follow
   remove-time --from A --to B [--hold N,M] take A to B out of every track, closing it up (the opposite)
   duplicate --clip C                       copy clips to just after themselves
+  duplicate --clip C [--to T] [--track N] [--source-in S] [--for D]
+                                 one copy made where it is wanted, in one step: at T on track N,
+                                 playing from S of its media for D (default: as the original). Placed
+                                 like add: `rose` if the track is taken there
   volume --clip C --value V                1 is as recorded, 0 silent, up to 4
   clean --clip C [--noise F] [--even/--no-even] | --off
                                  clean up a voice: rumble cut, steady noise down (0 to 1, 0.5), level evened out
@@ -615,9 +620,9 @@ fn build(args: &[String]) -> Result<Value, String> {
             "--no-bold" | "--no-italic" | "--no-shadow" | "--no-invert" | "--no-despill" => {
                 request.insert(arg[5..].into(), json!(false));
             }
-            "--at" | "--to" | "--from" | "--start" | "--end" | "--duration" => {
+            "--at" | "--to" | "--from" | "--start" | "--end" | "--duration" | "--source-in" => {
                 let raw = next(arg)?;
-                request.insert(arg[2..].into(), time_value(arg, raw)?);
+                request.insert(arg[2..].replace('-', "_"), time_value(arg, raw)?);
             }
             "--track" | "--fps" | "--version" | "--beat" | "--cue" | "--index" | "--display" | "--after" | "--shot"
             | "--take" | "--direction" | "--pace" => {
@@ -1036,6 +1041,14 @@ mod tests {
         assert_eq!(r, json!({"cmd": "insert-time", "at": 82.5, "for": 2.5, "hold": [1, 3]}));
         let r = build(&args("delete --clip 5 --ripple")).unwrap();
         assert_eq!(r["ripple"], json!(true));
+        let r = build(&args(
+            "duplicate --clip 346 --to 1:22.6 --track 8 --source-in 12.4 --for 2.5",
+        ))
+        .unwrap();
+        assert_eq!(
+            r,
+            json!({"cmd": "duplicate", "clips": [346], "to": 82.6, "track": 8, "source_in": 12.4, "for": 2.5})
+        );
         let r = build(&args("add --media logo.png --at end")).unwrap();
         assert_eq!(r, json!({"cmd": "add", "media": "logo.png", "at": "end"}));
         let r = build(&args("track --track 1 --mute --show")).unwrap();

@@ -1130,6 +1130,58 @@ impl Project {
         copies
     }
 
+    /// Copies one clip to `start` on `track` (counting from 0), playing from
+    /// `source_in` of its media for `duration` when given, in one step: the
+    /// copy is made as asked before it is placed, so nothing beside the
+    /// original cuts it short. Placed like any clip: if the track is taken
+    /// there it goes up to the first free one. `Err` says why it cannot be
+    /// made as asked (the media is too short).
+    pub fn duplicate_to(
+        &mut self,
+        id: ClipId,
+        start: Time,
+        track: usize,
+        source_in: Option<Time>,
+        duration: Option<Time>,
+    ) -> Result<ClipId, String> {
+        let frame = self.frame();
+        let mut clip = self.clip(id).ok_or("no such clip")?.clone();
+        let timed = self
+            .media(clip.media)
+            .filter(|m| m.is_timed() && clip.generator.is_none() && !clip.frozen);
+        if let Some(media) = timed {
+            let source_in = source_in.unwrap_or(clip.source_in);
+            let duration = duration.unwrap_or(clip.duration);
+            let span = (duration as f64 * clip.speed).round() as Time;
+            if source_in < 0 || source_in + span > media.duration + frame / 2 {
+                return Err(format!(
+                    "its media is {:.3}s long: from {:.3}s it has {:.3}s to play",
+                    crate::time::secs(media.duration),
+                    crate::time::secs(source_in),
+                    crate::time::secs(((media.duration - source_in).max(0) as f64 / clip.speed) as Time),
+                ));
+            }
+            clip.source_in = source_in;
+            clip.duration = duration.max(frame);
+        } else if source_in.is_some() {
+            return Err("only video and sound have a source to start from".into());
+        } else if let Some(d) = duration {
+            clip.duration = d.max(frame);
+        }
+        // Keyframes past the copy's end stay, as a trim keeps them.
+        clip.id = ClipId(self.alloc());
+        clip.start = start.max(0);
+        if clip.generator.is_none()
+            && self.is_used_symbol(clip.media)
+            && let Some(own) = self.fork_media(clip.media)
+        {
+            clip.media = own;
+        }
+        let new = clip.id;
+        self.place(clip, track);
+        Ok(new)
+    }
+
     /// Moves every clip on `track` that starts at or after `from` by `dt`.
     fn ripple(&mut self, track: usize, from: Time, dt: Time, except: ClipId) {
         if dt == 0 {
@@ -1552,6 +1604,39 @@ mod tests {
         p.stretch_clips_of(m, 5 * SECOND, -2 * SECOND);
         assert_eq!(p.clip(whole).unwrap().duration, 10 * SECOND);
         assert_eq!(p.clip(tail).unwrap().source_in, 6 * SECOND);
+    }
+
+    #[test]
+    fn a_copy_is_made_where_it_is_wanted() {
+        // A template of room tone, with clips flush either side of it.
+        let (mut p, m) = project_with(60 * SECOND);
+        let before = p.insert_clip(m, 0, 0).unwrap();
+        p.trim_end(before, 4 * SECOND);
+        let template = p.insert_clip(m, 0, 4 * SECOND).unwrap();
+        p.trim_end(template, 6 * SECOND);
+        let after = p.insert_clip(m, 0, 6 * SECOND).unwrap();
+        p.trim_end(after, 8 * SECOND);
+
+        let copy = p
+            .duplicate_to(template, 20 * SECOND, 0, Some(30 * SECOND), Some(5 * SECOND))
+            .unwrap();
+        let c = p.clip(copy).unwrap();
+        assert_eq!(
+            (c.start, c.duration, c.source_in),
+            (20 * SECOND, 5 * SECOND, 30 * SECOND)
+        );
+        assert_eq!(p.slot(copy).unwrap().track, 0);
+        // The original and its neighbours are untouched.
+        assert_eq!(p.clip(template).unwrap().duration, 2 * SECOND);
+
+        // Past the end of its media: refused, saying how much there is.
+        let err = p
+            .duplicate_to(template, 40 * SECOND, 0, Some(58 * SECOND), Some(5 * SECOND))
+            .unwrap_err();
+        assert!(err.contains("2.000s to play"), "{err}");
+        // Where its track is taken: it rises, as any placed clip does.
+        let up = p.duplicate_to(template, 5 * SECOND, 0, None, None).unwrap();
+        assert_eq!(p.slot(up).unwrap().track, 1);
     }
 
     #[test]

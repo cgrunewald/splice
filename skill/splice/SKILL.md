@@ -96,6 +96,7 @@ splice ctl delete --clip 4,5 --ripple               # --ripple closes the gap
 splice ctl insert-time --at 82.6 --for 1.5 --hold 3 # a pause on every track; track 3 (music) plays on
 splice ctl remove-time --from 40 --to 41.2          # take a stretch out of every track
 splice ctl duplicate --clip 3
+splice ctl duplicate --clip 3 --to 82.6 --track 8 --source-in 12.4 --for 1.5   # a copy made where it goes
 splice ctl volume --clip 9 --value 0.4              # 1 as recorded, 0 silent
 splice ctl clean --clip 9 --noise 0.6 --even        # clean up a voice (--off to undo)
 splice ctl track --track 2 --mute --hide            # --unmute, --show
@@ -110,10 +111,16 @@ splice ctl undo
   rounded to frames) does not rise: the earlier of the two is cut to end at
   the cut, listed under `trimmed`.
 - `trim` keeps a video clip inside its media: you cannot extend it past the
-  file's start or end. Images can be any length.
-- After `add` or `move`, check `warnings` in the reply: it is there only
+  file's start or end. Images can be any length. It also stops at the clip
+  beside it on the track. An edge that stopped short of where you asked is
+  listed under `clamped`, with what stopped it: check for it.
+- After `add`, `move`, `duplicate` or `trim`, check `warnings` in the reply: it is there only
   when a clip landed somewhere other than asked (`trimmed`, `rose`,
   `clamped`).
+- To copy a clip somewhere else (room tone into a gap, a shot reused), give
+  `duplicate` `--to`, `--track`, `--source-in` and `--for` rather than
+  copying, then trimming and moving. A copy made in place sits flush against
+  the original, so trims on it stop short.
 - `split` returns the new right halves under `new`.
 - To slow a finished cut down or tighten it, use `insert-time` and
   `remove-time`, not edits clip by clip: they move every track together, in

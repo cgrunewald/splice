@@ -249,7 +249,8 @@ impl Editor {
                     Ok(None) => None,
                     Err(e) => return Some(fail(e)),
                 };
-                self.import_paths(files, place, Some(reply), cx);
+                let separate = request.get("separate").and_then(Value::as_bool) == Some(true);
+                self.import_paths_with(files, place, separate, Some(reply), cx);
                 return None;
             }
             "add" => {

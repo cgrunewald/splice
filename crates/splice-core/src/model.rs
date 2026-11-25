@@ -656,10 +656,17 @@ impl Project {
     }
 
     /// Adds media to the library, or returns the existing entry with the same bytes.
-    pub fn add_media(&mut self, mut media: Media) -> MediaId {
+    pub fn add_media(&mut self, media: Media) -> MediaId {
         if let Some(existing) = self.media.iter().find(|m| m.hash == media.hash) {
             return existing.id;
         }
+        self.add_media_separately(media)
+    }
+
+    /// Adds media as an entry of its own, even when media with the same
+    /// bytes is already in the project (a re-render that came out the same,
+    /// kept under its own name).
+    pub fn add_media_separately(&mut self, mut media: Media) -> MediaId {
         media.id = MediaId(self.alloc());
         let id = media.id;
         self.media.push(media);
@@ -1637,6 +1644,18 @@ mod tests {
         // Where its track is taken: it rises, as any placed clip does.
         let up = p.duplicate_to(template, 5 * SECOND, 0, None, None).unwrap();
         assert_eq!(p.slot(up).unwrap().track, 1);
+    }
+
+    #[test]
+    fn the_same_bytes_are_one_media_unless_kept_apart() {
+        let mut p = Project::default();
+        let a = p.add_media(media(MediaKind::Video, SECOND));
+        let mut again = media(MediaKind::Video, SECOND);
+        again.name = "v6".into();
+        assert_eq!(p.add_media(again.clone()), a);
+        let b = p.add_media_separately(again);
+        assert_ne!(a, b);
+        assert_eq!(p.media(b).unwrap().name, "v6");
     }
 
     #[test]

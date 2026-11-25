@@ -104,6 +104,10 @@ splice ctl canvas --aspect 9:16                     # or --size 1080x1920, --fps
 splice ctl undo
 ```
 
+- Use the media id from `import`'s reply, never a lookup by name. A file
+  whose bytes match media already in the project (a re-render that came out
+  the same) reuses that media under its old name, marked `reused`;
+  `--separate` keeps it as an entry of its own.
 - Clips on one track never overlap. A clip placed or moved where there is no
   room rises to the first free track above; the reply shows where it landed,
   and lists it under `rose` (it now covers the layers between: check it is

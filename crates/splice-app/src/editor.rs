@@ -585,6 +585,19 @@ impl Editor {
         reply: Option<std::sync::mpsc::Sender<String>>,
         cx: &mut Context<Self>,
     ) {
+        self.import_paths_with(paths, place, false, reply, cx);
+    }
+
+    /// `import_paths`; `separate` keeps a file whose bytes are already in
+    /// the project as media of its own instead of reusing that media.
+    fn import_paths_with(
+        &mut self,
+        paths: Vec<PathBuf>,
+        place: Option<(Time, usize)>,
+        separate: bool,
+        reply: Option<std::sync::mpsc::Sender<String>>,
+        cx: &mut Context<Self>,
+    ) {
         let (projects, media): (Vec<PathBuf>, Vec<PathBuf>) = paths
             .into_iter()
             .partition(|p| p.extension().is_some_and(|e| e == EXTENSION));
@@ -617,7 +630,7 @@ impl Editor {
                         .collect::<Vec<anyhow::Result<_>>>()
                 })
                 .await;
-            this.update(cx, |editor, cx| editor.add_imported(probed, place, reply, cx))
+            this.update(cx, |editor, cx| editor.add_imported(probed, place, separate, reply, cx))
                 .ok();
         })
         .detach();
@@ -628,6 +641,7 @@ impl Editor {
         &mut self,
         probed: Vec<anyhow::Result<(PathBuf, ffmpeg::Probe, String)>>,
         place: Option<(Time, usize)>,
+        separate: bool,
         reply: Option<std::sync::mpsc::Sender<String>>,
         cx: &mut Context<Self>,
     ) {
@@ -636,30 +650,44 @@ impl Editor {
         let mut added: Vec<(Media, PathBuf)> = Vec::new();
         let mut placed = Vec::new();
         let mut takes: Vec<serde_json::Value> = Vec::new();
+        // Files whose bytes were already in the project, as what.
+        let mut reused: Vec<MediaId> = Vec::new();
         self.doc.edit(|project| {
             let mut at = place;
             for result in probed {
                 match result {
                     Ok((path, probe, hash)) => {
-                        let id = project.add_media(Media {
-                            id: MediaId(0),
-                            name: file_name(&path),
-                            hash,
-                            ext: path
-                                .extension()
-                                .map(|e| e.to_string_lossy().to_lowercase())
-                                .unwrap_or_default(),
-                            kind: probe.kind,
-                            duration: probe.duration,
-                            width: probe.width,
-                            height: probe.height,
-                            has_audio: probe.has_audio,
-                            source: path.clone(),
-                            recipe: None,
-                            content: None,
-                            // A screen recording's clicks, noted beside it.
-                            clicks: crate::recorder::read_clicks(&path),
-                        });
+                        let known = project.media.iter().find(|m| m.hash == hash).map(|m| m.id);
+                        let add = if separate {
+                            Project::add_media_separately
+                        } else {
+                            Project::add_media
+                        };
+                        let id = add(
+                            project,
+                            Media {
+                                id: MediaId(0),
+                                name: file_name(&path),
+                                hash,
+                                ext: path
+                                    .extension()
+                                    .map(|e| e.to_string_lossy().to_lowercase())
+                                    .unwrap_or_default(),
+                                kind: probe.kind,
+                                duration: probe.duration,
+                                width: probe.width,
+                                height: probe.height,
+                                has_audio: probe.has_audio,
+                                source: path.clone(),
+                                recipe: None,
+                                content: None,
+                                // A screen recording's clicks, noted beside it.
+                                clicks: crate::recorder::read_clicks(&path),
+                            },
+                        );
+                        if known == Some(id) {
+                            reused.push(id);
+                        }
                         let media = project.media(id).cloned().expect("just added");
                         if let Some(landing) = self.take_after_import.remove(&path) {
                             // The take is made (or lands) in the same step as
@@ -698,7 +726,15 @@ impl Editor {
         if let Some(reply) = reply {
             let media: Vec<_> = added
                 .iter()
-                .map(|(m, _)| serde_json::json!({ "id": m.id.0, "name": m.name }))
+                .map(|(m, path)| {
+                    let mut one = serde_json::json!({ "id": m.id.0, "name": m.name });
+                    if reused.contains(&m.id) {
+                        one["reused"] = true.into();
+                        one["path"] = serde_json::json!(m.source);
+                        one["imported"] = serde_json::json!(path);
+                    }
+                    one
+                })
                 .collect();
             let clips: Vec<_> = placed.iter().map(|c| c.0).collect();
             let mut answer = serde_json::json!({
@@ -710,6 +746,13 @@ impl Editor {
             });
             if let Some(take) = takes.first() {
                 answer["take"] = take.clone();
+            }
+            if !reused.is_empty() {
+                answer["note"] = serde_json::json!(
+                    "a file has the same bytes as media already in the project, so that media was used, under \
+                     the name it already had (`reused`): use the id in this reply, not a name; --separate keeps a \
+                     second entry under the new name"
+                );
             }
             let _ = reply.send(answer.to_string());
         }

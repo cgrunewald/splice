@@ -692,6 +692,7 @@ mod tests {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         });
         q.insert_clip(voice, 0, 0);
         q.insert_clip(voice, 0, s(10.0));

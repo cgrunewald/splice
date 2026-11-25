@@ -200,6 +200,7 @@ mod tests {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         })
     }
 

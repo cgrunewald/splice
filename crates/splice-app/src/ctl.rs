@@ -86,10 +86,13 @@ Transitions, speed and keyframes
                                  zoom. Default length 0.6s
   transition --all --kind KIND [--for S] [--track N]
                                  the same at every cut between two clips (on track N)
-  speed --clip C [--rate R] [--reverse|--forwards]
-                                 play at R (2 is twice as fast, 0.5 half; 0.1 to 16): the clip gets
-                                 shorter or longer over the same source, and what follows on its track
-                                 moves to match. Sound keeps its pitch
+  speed --clip C [--rate R | --for S] [--reverse|--forwards] [--ripple track|all|none]
+                                 play at R (2 is twice as fast, 0.5 half; 0.1 to 16), or at the rate
+                                 that makes it last S: the clip gets shorter or longer over the same
+                                 source. What follows moves to match: on its track (default), on every
+                                 track (all: keeps sync), or nothing (none: it keeps its place, and
+                                 slowed into the next clip ends where that starts). The reply lists
+                                 what moved. Sound keeps its pitch
   freeze --clip C [--at T] [--for S]       hold the frame at T (default: the playhead) for S (default 2)
   keyframe --clip C --at T [--x F] [--y F] [--scale F] [--opacity F] [--ease EASE]
                                  set values at timeline time T; between keyframes they glide. EASE
@@ -568,6 +571,7 @@ fn build(args: &[String]) -> Result<Value, String> {
     let mut clips: Vec<Value> = Vec::new();
     let mut rest = rest.iter();
     while let Some(arg) = rest.next() {
+        let ripple_mode = arg == "--ripple" && rest.clone().next().is_some_and(|v| !v.starts_with("--"));
         let mut next = |name: &str| rest.next().ok_or(format!("{name} needs a value"));
         match arg.as_str() {
             "--font" | "--color" | "--box" | "--align" | "--anchor" | "--enter" | "--exit" | "--drift" | "--key"
@@ -691,6 +695,10 @@ fn build(args: &[String]) -> Result<Value, String> {
             "--dx" | "--dy" => {
                 let v: f64 = next(arg)?.parse().map_err(|_| format!("{arg} expects points"))?;
                 request.insert(arg[2..].into(), json!(v));
+            }
+            // `--ripple` alone (delete), or `--ripple track|all|none` (speed).
+            "--ripple" if ripple_mode => {
+                request.insert("ripple".into(), json!(next(arg)?));
             }
             "--ripple" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam" | "--drop"
             | "--plain" | "--replace" | "--heard" | "--board-only" => {
@@ -948,6 +956,10 @@ mod tests {
     fn builds_requests() {
         let r = build(&args("move --clip 3,4 --to 1:30 --track 2")).unwrap();
         assert_eq!(r, json!({"cmd": "move", "clips": [3, 4], "to": 90.0, "track": 2}));
+        let r = build(&args("speed --clip 5 --for 3.2 --ripple all")).unwrap();
+        assert_eq!((r["for"].as_f64(), r["ripple"].as_str()), (Some(3.2), Some("all")));
+        let r = build(&args("delete --clip 5 --ripple")).unwrap();
+        assert_eq!(r["ripple"], json!(true));
         let r = build(&args("add --media logo.png --at end")).unwrap();
         assert_eq!(r, json!({"cmd": "add", "media": "logo.png", "at": "end"}));
         let r = build(&args("track --track 1 --mute --show")).unwrap();

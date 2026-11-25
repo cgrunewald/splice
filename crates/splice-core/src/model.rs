@@ -223,6 +223,49 @@ fn is_false(v: &bool) -> bool {
 }
 
 /// The slowest and fastest a clip plays.
+/// What moves to make room when a clip gets longer or shorter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Ripple {
+    /// Nothing: the clip keeps its place, and is cut short where it would
+    /// run into the clip after it.
+    None,
+    /// What follows on the clip's own track.
+    #[default]
+    Track,
+    /// What follows on every track, so everything stays in sync.
+    All,
+}
+
+impl Ripple {
+    pub fn parse(name: &str) -> Option<Ripple> {
+        match name {
+            "none" | "off" | "no" => Some(Ripple::None),
+            "track" => Some(Ripple::Track),
+            "all" => Some(Ripple::All),
+            _ => None,
+        }
+    }
+}
+
+/// What a change of speed did beyond the clips it was asked to change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Retimed {
+    /// Clips that moved to make room.
+    pub moved: Vec<ClipId>,
+    /// Clips cut short where they would have run into the next clip.
+    pub cut_short: Vec<ClipId>,
+    /// Clips sped up whose followers could not move all the way up (a clip
+    /// spanning the cut on another track was in the way): a gap is left.
+    pub held: Vec<ClipId>,
+}
+
+/// What `shift_after` moved, and how far.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shifted {
+    pub clips: Vec<ClipId>,
+    pub by: Time,
+}
+
 pub const SLOWEST: f64 = 0.1;
 pub const FASTEST: f64 = 16.0;
 
@@ -1062,12 +1105,21 @@ impl Project {
     /// source each plays: a clip sped up gets shorter and one slowed down
     /// longer, and what follows on its track moves up or along to match.
     pub fn set_speed(&mut self, ids: &[ClipId], speed: f64) {
+        self.set_speed_rippling(ids, speed, Ripple::Track);
+    }
+
+    /// `set_speed`, saying what moves to make room: what follows on the
+    /// clip's own track, what follows on every track, or nothing (the clip
+    /// keeps its place; slowed into the clip after it, it ends where that
+    /// one starts). Says what moved and what was cut short.
+    pub fn set_speed_rippling(&mut self, ids: &[ClipId], speed: f64, ripple: Ripple) -> Retimed {
         let speed = if speed.is_finite() {
             speed.clamp(SLOWEST, FASTEST)
         } else {
             1.0
         };
         let frame = self.frame();
+        let mut retimed = Retimed::default();
         for &id in ids {
             let Some(slot) = self.slot(id) else { continue };
             let clip = &self.tracks[slot.track].clips[slot.index];
@@ -1075,14 +1127,28 @@ impl Project {
             if clip.generator.is_some() || !timed || clip.frozen || clip.speed == speed {
                 continue;
             }
-            let (end, old) = (clip.end(), clip.speed);
+            let (start, end, old) = (clip.start, clip.end(), clip.speed);
             let span = clip.span();
             // On whole frames, so what follows stays on the frame grid.
             let fps = self.settings.fps;
-            let length = crate::time::floor_to_frame((span as f64 / speed).round() as Time + frame / 2, fps);
+            let mut length = crate::time::floor_to_frame((span as f64 / speed).round() as Time + frame / 2, fps);
             if length < frame {
                 // Too short to play that fast.
                 continue;
+            }
+            if ripple == Ripple::None {
+                let next = self.tracks[slot.track]
+                    .clips
+                    .iter()
+                    .filter(|c| c.id != id && c.start >= end)
+                    .map(|c| c.start)
+                    .min();
+                if let Some(next) = next
+                    && start + length > next
+                {
+                    length = next - start;
+                    retimed.cut_short.push(id);
+                }
             }
             let clip = &mut self.tracks[slot.track].clips[slot.index];
             let out = clip.source_out();
@@ -1097,8 +1163,66 @@ impl Project {
                 t.duration = t.duration.min(clip.duration);
             }
             let dt = clip.end() - end;
-            self.ripple(slot.track, end, dt, id);
+            match ripple {
+                Ripple::None => {}
+                Ripple::Track => {
+                    let moved = self.tracks[slot.track]
+                        .clips
+                        .iter()
+                        .filter(|c| c.id != id && c.start >= end)
+                        .map(|c| c.id);
+                    if dt != 0 {
+                        retimed.moved.extend(moved);
+                    }
+                    self.ripple(slot.track, end, dt, id);
+                }
+                Ripple::All => {
+                    let shifted = self.shift_after(end, dt, &[id]);
+                    retimed.moved.extend(shifted.clips);
+                    if shifted.by != dt {
+                        retimed.held.push(id);
+                    }
+                }
+            }
         }
+        retimed.moved.sort_by_key(|c| c.0);
+        retimed.moved.dedup();
+        retimed
+    }
+
+    /// Moves every clip that starts at or after `from`, on every track, by
+    /// `dt`, except `except`. Clips that span `from` stay. Earlier is as far
+    /// as the clips before them allow on every track, so nothing overlaps;
+    /// the reply says how far they went.
+    pub fn shift_after(&mut self, from: Time, dt: Time, except: &[ClipId]) -> Shifted {
+        let moving = |c: &Clip| c.start >= from && !except.contains(&c.id);
+        let room = self
+            .tracks
+            .iter()
+            .filter_map(|t| {
+                let first = t.clips.iter().filter(|c| moving(c)).map(|c| c.start).min()?;
+                let before = t
+                    .clips
+                    .iter()
+                    .filter(|c| !moving(c) && c.start < first)
+                    .map(Clip::end)
+                    .max();
+                Some(first - before.unwrap_or(0).min(first))
+            })
+            .min()
+            .unwrap_or(0);
+        let by = dt.max(-room);
+        let mut clips = Vec::new();
+        if by != 0 {
+            for track in &mut self.tracks {
+                for clip in track.clips.iter_mut().filter(|c| moving(c)) {
+                    clip.start += by;
+                    clips.push(clip.id);
+                }
+                track.clips.sort_by_key(|c| c.start);
+            }
+        }
+        Shifted { clips, by }
     }
 
     /// Plays clips backwards (or forwards again), over the same stretch of source.
@@ -1302,6 +1426,64 @@ mod tests {
         let mut p = Project::default();
         let m = p.add_media(media(MediaKind::Video, duration));
         (p, m)
+    }
+
+    #[test]
+    fn speed_ripples_its_track_every_track_or_nothing() {
+        // Screen on track 1, voice on track 2, music under both on track 3.
+        let setup = || {
+            let (mut p, m) = project_with(4 * SECOND);
+            let music = p.add_media(media(MediaKind::Audio, 20 * SECOND));
+            let a = p.insert_clip(m, 0, 0).unwrap();
+            let b = p.insert_clip(m, 0, 4 * SECOND).unwrap();
+            p.insert_clip(m, 1, 0).unwrap();
+            let v2 = p.insert_clip(m, 1, 4 * SECOND).unwrap();
+            let under = p.insert_clip(music, 2, 0).unwrap();
+            (p, a, b, v2, under)
+        };
+        let start = |p: &Project, id| p.clip(id).unwrap().start;
+
+        // Its own track: the voice after it stays put.
+        let (mut p, a, b, v2, _) = setup();
+        let r = p.set_speed_rippling(&[a], 0.5, Ripple::Track);
+        assert_eq!((start(&p, b), start(&p, v2)), (8 * SECOND, 4 * SECOND));
+        assert_eq!(r.moved, vec![b]);
+
+        // Every track: the voice goes along, the music under it stays.
+        let (mut p, a, b, v2, under) = setup();
+        let r = p.set_speed_rippling(&[a], 0.5, Ripple::All);
+        assert_eq!(p.clip(a).unwrap().duration, 8 * SECOND);
+        assert_eq!(
+            (start(&p, b), start(&p, v2), start(&p, under)),
+            (8 * SECOND, 8 * SECOND, 0)
+        );
+        assert_eq!(r.moved, {
+            let mut m = vec![b, v2];
+            m.sort_by_key(|c| c.0);
+            m
+        });
+        assert!(r.held.is_empty() && r.cut_short.is_empty());
+
+        // Sped up, the voice before has no room to give: nothing moves up
+        // and the gap is said.
+        let (mut p, a, b, v2, _) = setup();
+        let r = p.set_speed_rippling(&[a], 2.0, Ripple::All);
+        assert_eq!(p.clip(a).unwrap().duration, 2 * SECOND);
+        assert_eq!((start(&p, b), start(&p, v2)), (4 * SECOND, 4 * SECOND));
+        assert_eq!(r.held, vec![a]);
+
+        // In place: slowed into the next clip, it ends where that starts.
+        let (mut p, a, b, v2, _) = setup();
+        let r = p.set_speed_rippling(&[a], 0.5, Ripple::None);
+        let c = p.clip(a).unwrap();
+        assert_eq!((c.duration, c.speed), (4 * SECOND, 0.5));
+        assert_eq!((start(&p, b), start(&p, v2)), (4 * SECOND, 4 * SECOND));
+        assert_eq!(r.cut_short, vec![a]);
+        assert!(r.moved.is_empty());
+        // Sped up in place: shorter, a gap after it.
+        let r = p.set_speed_rippling(&[b], 2.0, Ripple::None);
+        assert_eq!(p.clip(b).unwrap().duration, 2 * SECOND);
+        assert!(r.moved.is_empty() && r.cut_short.is_empty());
     }
 
     #[test]

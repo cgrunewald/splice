@@ -336,34 +336,8 @@ impl Project {
         // Footage of this beat stays; footage after it moves.
         let own = self.beat_clips(id);
         self.story.beats[i].duration = duration;
-        let moving = |c: &Clip| c.start >= end && !own.contains(&c.id);
-        // How far earlier they can go: to zero, or to the footage before them.
-        let room = self
-            .tracks
-            .iter()
-            .filter_map(|t| {
-                let first = t.clips.iter().filter(|c| moving(c)).map(|c| c.start).min()?;
-                let before = t
-                    .clips
-                    .iter()
-                    .filter(|c| !moving(c) && c.start < first)
-                    .map(Clip::end)
-                    .max();
-                Some(first - before.unwrap_or(0).min(first))
-            })
-            .min()
-            .unwrap_or(0);
-        let by = asked.max(-room);
-        let mut clips = Vec::new();
-        if by != 0 {
-            for track in &mut self.tracks {
-                for clip in track.clips.iter_mut().filter(|c| moving(c)) {
-                    clip.start += by;
-                    clips.push(clip.id);
-                }
-                track.clips.sort_by_key(|c| c.start);
-            }
-        }
+        let shifted = self.shift_after(end, asked, &own);
+        let (clips, by) = (shifted.clips, shifted.by);
         Rippled { clips, by, asked }
     }
 

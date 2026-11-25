@@ -129,6 +129,12 @@ Transitions, speed and keyframes
                                  Where the clip reads the story's script, the words are written as the
                                  script has them, at the times they were heard (--heard: as heard)
   captions --file subtitles.srt  captions from an .srt or .vtt file
+  captions [--names "Halyard, Avery Lund"] [--fix "How your=Halyard; Allure=Halyard"] [--spelling]
+                                 spellings kept with the project for every captioning: names to listen
+                                 for (with the bible's names and capitalised words in titles and beat
+                                 titles, they guide what is heard), and words always misheard, put
+                                 right after hearing. Alone, or --spelling: the list. With --clip and
+                                 the rest, saved and then used
 
 Music (a score: instruments and notes, played by General MIDI sounds)
   score new [--file score.json] [--name N] [--at T] [--track N] [--wait]
@@ -703,7 +709,8 @@ fn build(args: &[String]) -> Result<Value, String> {
             }
             "--text" | "--label" | "--name" | "--new" | "--as" | "--kind" | "--words" | "--prompt" | "--model"
             | "--mode" | "--tool" | "--refs" | "--job" | "--aspect" | "--layer" | "--into" | "--remove" | "--json"
-            | "--add" | "--title" | "--story" | "--capture" | "--region" | "--note" | "--script" => {
+            | "--add" | "--title" | "--story" | "--capture" | "--region" | "--note" | "--script" | "--names"
+            | "--fix" => {
                 request.insert(arg[2..].into(), json!(value(next(arg)?)?));
             }
             "--match-text" => {
@@ -734,8 +741,8 @@ fn build(args: &[String]) -> Result<Value, String> {
             "--ripple" if ripple_mode => {
                 request.insert("ripple".into(), json!(next(arg)?));
             }
-            "--ripple" | "--separate" | "--wait" | "--keep" | "--none" | "--all" | "--reset" | "--clear" | "--seam"
-            | "--drop" | "--plain" | "--replace" | "--heard" | "--board-only" => {
+            "--ripple" | "--separate" | "--spelling" | "--wait" | "--keep" | "--none" | "--all" | "--reset"
+            | "--clear" | "--seam" | "--drop" | "--plain" | "--replace" | "--heard" | "--board-only" => {
                 request.insert(arg[2..].into(), json!(true));
             }
             "--done" | "--undone" => {
@@ -1054,6 +1061,14 @@ mod tests {
         );
         let r = build(&args("import /m/g09v6.mp4 --separate")).unwrap();
         assert_eq!(r, json!({"cmd": "import", "files": ["/m/g09v6.mp4"], "separate": true}));
+        let mut line = args("captions --clip 4 --names Halyard,Avery --fix");
+        line.push("How your=Halyard".into());
+        let r = build(&line).unwrap();
+        assert_eq!(
+            (r["names"].as_str(), r["clips"][0].as_u64()),
+            (Some("Halyard,Avery"), Some(4))
+        );
+        assert_eq!(r["fix"], "How your=Halyard");
         let r = build(&args("add --media logo.png --at end")).unwrap();
         assert_eq!(r, json!({"cmd": "add", "media": "logo.png", "at": "end"}));
         let r = build(&args("track --track 1 --mute --show")).unwrap();

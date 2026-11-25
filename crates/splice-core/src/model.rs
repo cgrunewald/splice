@@ -522,6 +522,9 @@ pub struct Project {
     /// How this project records; None uses the default the user has set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub studio: Option<crate::studio::Studio>,
+    /// Names captions should spell right, and words they mishear.
+    #[serde(default, skip_serializing_if = "crate::captions::Spelling::is_empty")]
+    pub spelling: crate::captions::Spelling,
     next_id: u64,
 }
 
@@ -542,6 +545,7 @@ impl Default for Project {
             hold: None,
             letterbox: None,
             studio: None,
+            spelling: crate::captions::Spelling::default(),
             next_id: 2,
         }
     }

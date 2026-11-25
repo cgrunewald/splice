@@ -873,9 +873,10 @@ impl Editor {
         });
         cx.notify();
         let (id, from, span) = (voice.id, voice.source_in, voice.span());
+        let names = self.doc.project.names_to_hear();
         cx.spawn(async move |this, cx| {
             let heard = cx
-                .background_spawn(async move { crate::speech::transcribe(&path, from, span) })
+                .background_spawn(async move { crate::speech::transcribe(&path, from, span, &names) })
                 .await;
             this.update(cx, |editor, cx| {
                 editor.captioning.remove(&id);

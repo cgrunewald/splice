@@ -139,6 +139,11 @@ Scenes (animation and diagrams: layers of shapes, lines, paths and words that mo
   scene read --media M           its JSON, length, file, and how its render went
   scene write --media M [--file scene.json] [--duration D] [--opaque|--transparent] [--wait]
                                  change it; it re-renders (about a second) and its clips follow
+  scene stretch --media M --at T --by D [--wait]
+                                 put D seconds into the scene at T (seconds into it; D less than 0
+                                 takes them out): every entrance, exit, drawing, count and keyframe
+                                 from T on moves along, the scene gets D longer, and clips showing it
+                                 keep showing what they did, a clip across T getting D longer
   scene help                     the scene format, with an example
   scene sheet --media M <file.png> [--every S]
                                  frames across the scene in a grid, each with its time: see the motion

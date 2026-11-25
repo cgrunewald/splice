@@ -935,6 +935,102 @@ fn open(source: &str) -> anyhow::Result<Value> {
     serde_json::from_str(source).map_err(|e| anyhow::anyhow!("the scene is not valid JSON: {e}"))
 }
 
+/// Properties that can be keyframes (`[[seconds, value], …]`).
+const KEYED: [&str; 14] = [
+    "x",
+    "y",
+    "width",
+    "height",
+    "radius",
+    "size",
+    "strokeWidth",
+    "opacity",
+    "scale",
+    "rotate",
+    "zoom",
+    "from",
+    "to",
+    "stroke_width",
+];
+
+/// Puts `by` seconds into a scene at `at` (takes them out when `by` is
+/// less than 0): every entrance, exit, outline drawing, typing, count and
+/// keyframe at or after `at` moves along by `by`, so what happens after
+/// `at` happens that much later. Taken out, what was in the stretch
+/// happens at `at`. Returns the new JSON.
+pub fn stretch(source: &str, at: f64, by: f64) -> anyhow::Result<String> {
+    fn moved(t: f64, at: f64, by: f64) -> f64 {
+        if t < at {
+            t
+        } else if by >= 0.0 {
+            t + by
+        } else {
+            // Taken out: from `at` to `at - by` closes up to `at`.
+            (t + by).max(at)
+        }
+    }
+    // Times that stay are left as written.
+    fn set(t: &mut Value, n: f64, at: f64, by: f64) {
+        let m = moved(n, at, by);
+        if m != n {
+            *t = Value::from(m);
+        }
+    }
+    fn keys(value: &mut Value, at: f64, by: f64) {
+        let Some(list) = value.as_array_mut() else { return };
+        // `from` and `to` are pairs of props, each maybe keyframes.
+        if list
+            .iter()
+            .any(|v| v.as_array().is_some_and(|k| !k.first().is_some_and(Value::is_number)))
+        {
+            for v in list {
+                keys(v, at, by);
+            }
+            return;
+        }
+        for key in list.iter_mut() {
+            if let Some(t) = key.as_array_mut().and_then(|k| k.first_mut())
+                && let Some(n) = t.as_f64()
+            {
+                set(t, n, at, by);
+            } else if key.is_array() {
+                keys(key, at, by);
+            }
+        }
+    }
+    fn walk(layer: &mut Value, at: f64, by: f64) {
+        let Some(object) = layer.as_object_mut() else { return };
+        for (name, value) in object.iter_mut() {
+            match name.as_str() {
+                "enter" | "exit" | "draw" | "typewriter" | "counter" => {
+                    if let Some(t) = value.get_mut("at")
+                        && let Some(n) = t.as_f64()
+                    {
+                        set(t, n, at, by);
+                    }
+                }
+                "camera" => {
+                    if let Some(camera) = value.as_object_mut() {
+                        for v in camera.values_mut() {
+                            keys(v, at, by);
+                        }
+                    }
+                }
+                "layers" | "children" => {
+                    for child in value.as_array_mut().into_iter().flatten() {
+                        walk(child, at, by);
+                    }
+                }
+                name if KEYED.contains(&name) => keys(value, at, by),
+                _ => {}
+            }
+        }
+    }
+    let mut value = open(source)?;
+    walk(&mut value, at, by);
+    finish(&value)
+}
+
 /// Merges `patch` into the layer named `layer`, or into the scene itself.
 pub fn patch(source: &str, layer: Option<&str>, patch: &Value) -> anyhow::Result<String> {
     patch_which(source, layer.map_or(Which::Scene, Which::Named), patch)
@@ -1213,6 +1309,50 @@ pub fn lint(spec: &Spec, seconds: f64, has_font: impl Fn(&str) -> bool) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stretching_a_scene_moves_what_comes_later() {
+        let source = r##"{
+          "camera": { "zoom": [[0, 1], [6, 1.4, "inOutCubic"]] },
+          "layers": [
+            { "type": "text", "name": "early", "text": "Plan", "enter": {"kind": "fade", "at": 1}, "exit": {"at": 4} },
+            { "type": "group", "name": "later", "enter": "pop", "children": [
+              { "type": "line", "name": "arrow", "from": [0, [[5, 0], [7, 100]]], "to": [200, 0],
+                "draw": {"at": 5, "duration": 1} },
+              { "type": "rect", "name": "box", "x": [[2, 0], [8, 300]], "opacity": 1,
+                "fill": {"stops": [[0, "#ff0000"], [1, "#0000ff"]]},
+                "counter": {"to": 5, "at": 9} }
+            ]}
+          ]
+        }"##;
+        let out: Value = serde_json::from_str(&stretch(source, 4.5, 3.0).unwrap()).unwrap();
+        let early = &out["layers"][0];
+        assert_eq!(
+            (early["enter"]["at"].as_f64(), early["exit"]["at"].as_f64()),
+            (Some(1.0), Some(4.0))
+        );
+        let arrow = &out["layers"][1]["children"][0];
+        assert_eq!(arrow["draw"]["at"], 8.0);
+        assert_eq!(arrow["from"][1], serde_json::json!([[8.0, 0], [10.0, 100]]));
+        assert_eq!(arrow["to"], serde_json::json!([200, 0]));
+        let rect = &out["layers"][1]["children"][1];
+        assert_eq!(rect["x"], serde_json::json!([[2, 0], [11.0, 300]]));
+        assert_eq!(rect["counter"]["at"], 12.0);
+        // A gradient's stops are not times.
+        assert_eq!(rect["fill"]["stops"][1][0], 1);
+        assert_eq!(
+            out["camera"]["zoom"],
+            serde_json::json!([[0, 1], [9.0, 1.4, "inOutCubic"]])
+        );
+        // A preset entrance has no time to move.
+        assert_eq!(out["layers"][1]["enter"], "pop");
+
+        // Taken out: what was in the stretch happens at its start.
+        let out: Value = serde_json::from_str(&stretch(source, 3.0, -2.5).unwrap()).unwrap();
+        assert_eq!(out["layers"][0]["exit"]["at"], 3.0);
+        assert_eq!(out["layers"][1]["children"][0]["draw"]["at"], 3.0);
+        assert_eq!(out["layers"][1]["children"][1]["counter"]["at"], 6.5);
+    }
 
     const CANVAS: Canvas = Canvas {
         width: 1280.0,

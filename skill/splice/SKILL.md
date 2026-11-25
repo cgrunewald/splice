@@ -340,7 +340,16 @@ splice ctl scene patch --media 23 --index 4 --json '{"fill": "#f2c14e"}' --wait 
 splice ctl scene add --media 23 --into steps --add '{"type": "rect", "name": "four", …}' --wait
 splice ctl scene remove --media 23 --remove four --wait
 splice ctl scene write --media 23 --file scene.json --wait    # replace it all; also --duration, --opaque
+splice ctl scene stretch --media 23 --at 12 --by 4 --wait     # 4s more from 12s in; --by -4 takes it out
 ```
+
+- To make a scene longer or shorter, use `scene stretch`, not `write
+  --duration` (which changes only its length). Every time from `--at` on
+  (entrances, exits, `draw`, `typewriter`, `counter`, keyframes, the camera)
+  moves along, and the clips showing it keep showing what they did; a clip
+  across `--at` gets longer. `--at` at the scene's end holds its last
+  moment. To hold one section longer under slower narration, stretch at the
+  end of that section.
 
 - Name the layers you will change (`"name": "title"`); `patch`, `add
   --into` and `remove` find them anywhere in the scene. `patch` merges

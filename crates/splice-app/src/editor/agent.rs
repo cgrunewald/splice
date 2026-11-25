@@ -303,6 +303,21 @@ impl Editor {
                 let clips: Vec<Value> = ids.iter().map(|id| self.clip_json(*id)).collect();
                 let mut reply = json!({ "clips": clips });
                 self.say_how_placed(&mut reply, &lengths, &asked);
+                // Moved earlier than the timeline's start: stopped at 0, the
+                // others keeping their spacing.
+                let got = self.doc.project.clip(ids[0]).map_or(start, |c| c.start);
+                if (got - (start + dt)).abs() > self.doc.project.frame() / 2 {
+                    reply["clamped"] = json!([{
+                        "clip": ids[0].0, "asked": s(start + dt), "got": s(got),
+                        "by": "the start of the timeline (clips moved together keep their spacing)",
+                    }]);
+                    let mut warnings = reply["warnings"].as_array().cloned().unwrap_or_default();
+                    warnings.push(json!(
+                        "moved that far, a clip would start before 0: the earliest starts at 0 and the rest keep \
+                         their spacing (`clamped`)"
+                    ));
+                    reply["warnings"] = json!(warnings);
+                }
                 self.edited_with(reply)
             }
             "trim" => {
@@ -1067,6 +1082,8 @@ impl Editor {
         }
         if !notes.is_empty() {
             reply["note"] = json!(notes.join("; "));
+            // One field a script can check after every edit.
+            reply["warnings"] = json!(notes);
         }
     }
 

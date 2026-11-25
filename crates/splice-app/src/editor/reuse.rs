@@ -573,6 +573,29 @@ impl Editor {
         .detach();
     }
 
+    /// Which clips on the timeline are uses of a symbol, for an error that
+    /// named one that is not.
+    fn symbol_uses(&self) -> String {
+        let project = &self.doc.project;
+        let uses: Vec<String> = project
+            .clips()
+            .filter_map(|(_, c)| match &project.media(c.media)?.recipe {
+                Some(Recipe::Symbol(s)) if c.generator.is_none() => Some(format!("clip {} ({})", c.id.0, s.name)),
+                _ => None,
+            })
+            .take(12)
+            .collect();
+        if uses.is_empty() {
+            "No clip on the timeline is a use of a symbol; `symbol list` shows your symbols, `symbol add` places one"
+                .into()
+        } else {
+            format!(
+                "Uses of symbols: {}. A use broken back into its clips (`symbol break`) is no longer one",
+                uses.join(", ")
+            )
+        }
+    }
+
     /// Puts a use's own copy into your symbols as `name`, keeping its identity
     /// when that is free, so this use and others like it follow it again.
     pub(super) fn keep_symbol(&mut self, media: MediaId, name: &str, reply: Option<Reply>, cx: &mut Context<Self>) {
@@ -859,7 +882,11 @@ impl Editor {
             let media = this.doc.project.media(id).cloned().ok_or("no such media")?;
             match &media.recipe {
                 Some(Recipe::Symbol(s)) => Ok((media.clone(), s.clone())),
-                _ => Err(format!("{} is not a use of a symbol", media.name)),
+                _ => Err(format!(
+                    "{} is not a use of a symbol. {}",
+                    media.name,
+                    this.symbol_uses()
+                )),
             }
         };
         match text("sub").unwrap_or("list") {

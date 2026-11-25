@@ -28,6 +28,29 @@ pub struct Layout {
     pub until: Option<Time>,
 }
 
+/// Fits heard words to when there is sound: the speech model's times run
+/// over pauses (a word "said" through a second of silence, one lit before
+/// it is said). A word that starts in a silence starts where it ends; one
+/// that runs into a silence ends where it starts. `silences` are
+/// (start, end), in the words' time, in order.
+pub fn fit_to_sound(words: &[Word], silences: &[(Time, Time)]) -> Vec<Word> {
+    words
+        .iter()
+        .map(|w| {
+            let mut w = w.clone();
+            if let Some(&(_, b)) = silences.iter().find(|(a, b)| w.start >= *a && w.start < *b)
+                && b < w.end
+            {
+                w.start = b;
+            }
+            if let Some(&(a, _)) = silences.iter().find(|(a, _)| *a > w.start && *a < w.end) {
+                w.end = a;
+            }
+            w
+        })
+        .collect()
+}
+
 impl Default for Layout {
     fn default() -> Layout {
         Layout {
@@ -48,6 +71,11 @@ const SHORTEST: Time = SECOND * 7 / 10;
 /// split into as few lines as fit `layout.words` words and `layout.chars`
 /// characters, its words shared evenly, so no line is left with one word.
 pub fn lines(words: &[Word], layout: &Layout) -> Vec<Vec<Word>> {
+    lines_between(words, layout, &[])
+}
+
+/// `lines`, never running a line across one of `cuts` (times).
+pub fn lines_between(words: &[Word], layout: &Layout, cuts: &[Time]) -> Vec<Vec<Word>> {
     let words = tidy(words);
     // Phrases first: a sentence ends, or the speaker pauses.
     let mut phrases: Vec<Vec<Word>> = Vec::new();
@@ -59,7 +87,10 @@ pub fn lines(words: &[Word], layout: &Layout) -> Vec<Vec<Word>> {
                 .trim_end()
                 .ends_with(['.', '?', '!', ':', ';', '。', '？', '！'])
         });
-        if !phrase.is_empty() && (paused || ended) {
+        let cut = phrase
+            .last()
+            .is_some_and(|last| cuts.iter().any(|c| *c > last.start && *c <= word.start));
+        if !phrase.is_empty() && (paused || ended || cut) {
             phrases.push(std::mem::take(&mut phrase));
         }
         phrase.push(Word {
@@ -241,8 +272,37 @@ pub fn style(canvas: (u32, u32)) -> (Title, Look) {
 }
 
 impl Project {
+    /// Where the picture changes outright, which a caption line should not
+    /// run across: each cut on the bottom track, and the edges of colours
+    /// filling the frame (a title card).
+    pub fn caption_cuts(&self) -> Vec<Time> {
+        let mut cuts: Vec<Time> = Vec::new();
+        if let Some(bottom) = self.tracks.first().filter(|t| !t.hidden) {
+            // Pictures only: a cut in a sound track changes nothing seen.
+            let seen = bottom
+                .clips
+                .iter()
+                .filter(|c| self.source(c).is_some_and(|s| s.is_visual()));
+            cuts.extend(seen.flat_map(|c| [c.start, c.end()]));
+        }
+        for track in self.tracks.iter().skip(1).filter(|t| !t.hidden) {
+            for c in &track.clips {
+                let card = matches!(c.generator, Some(Generator::Color { color }) if color & 0xff == 0xff)
+                    && c.look.scale >= 1.0
+                    && c.look.opacity >= 1.0;
+                if card {
+                    cuts.extend([c.start, c.end()]);
+                }
+            }
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        cuts
+    }
+
     /// Lays captions over the movie, on a new track on top: each line a
-    /// title from its first word to just before the next line. Returns them.
+    /// title from its first word to just before the next line, never across
+    /// a cut (`caption_cuts`). Returns them.
     pub fn add_captions(&mut self, words: &[Word], layout: &Layout) -> Vec<ClipId> {
         let (base, look) = style((self.settings.width, self.settings.height));
         // No longer than fits across the canvas at the caption's size (a
@@ -254,7 +314,8 @@ impl Project {
             words: layout.words.min((fits / 5).max(2)),
             ..*layout
         };
-        let mut lines = lines(words, &layout);
+        let cuts = self.caption_cuts();
+        let mut lines = lines_between(words, &layout, &cuts);
         // A line starting within two frames of the one before joins it, so
         // none is too short to show (or would have to go on another track).
         let frame = self.frame();
@@ -280,7 +341,14 @@ impl Project {
                 said + SECOND / 5
             };
             let until = layout.until.unwrap_or(Time::MAX);
-            let end = end.max(start + SHORTEST).min(next).min(until).max(start + frame);
+            // Off at the next cut, as the picture changes.
+            let cut = cuts.iter().copied().find(|c| *c > start).unwrap_or(Time::MAX);
+            let end = end
+                .max(start + SHORTEST)
+                .min(next)
+                .min(until)
+                .min(cut)
+                .max(start + frame);
             let title = Title {
                 text: join(line),
                 animate: layout.karaoke.then_some(TextMotion {
@@ -385,6 +453,77 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn word(text: &str, start: f64, end: f64) -> Word {
+        Word {
+            text: text.into(),
+            start: crate::time::from_secs(start),
+            end: crate::time::from_secs(end),
+        }
+    }
+
+    #[test]
+    fn words_fit_the_sound_not_the_silence() {
+        let s = crate::time::from_secs;
+        // "done." runs on through two seconds of silence; "next" is "said"
+        // before the silence ends.
+        let heard = [word("all", 0.0, 0.4), word("done.", 0.4, 3.0), word("next", 2.2, 2.9)];
+        let out = fit_to_sound(&heard, &[(s(0.9), s(2.5))]);
+        assert_eq!((out[1].start, out[1].end), (s(0.4), s(0.9)));
+        assert_eq!((out[2].start, out[2].end), (s(2.5), s(2.9)));
+        assert_eq!(out[0], heard[0]);
+    }
+
+    #[test]
+    fn a_line_does_not_run_across_a_cut() {
+        let s = crate::time::from_secs;
+        let mut p = Project::default();
+        p.insert_generated(Generator::Color { color: 0x202020ff }, 0, 0, s(2.0));
+        p.insert_generated(Generator::Color { color: 0x404040ff }, 0, s(2.0), s(4.0));
+        // A full-frame card on a track above, from 4s to 5s.
+        p.insert_generated(Generator::Color { color: 0x000000ff }, 1, s(4.0), s(1.0));
+        assert_eq!(p.caption_cuts(), vec![0, s(2.0), s(4.0), s(5.0), s(6.0)]);
+        // One sentence said across the cut at 2s and over the card.
+        let words = [
+            word("this", 1.0, 1.3),
+            word("goes", 1.3, 1.7),
+            word("on", 2.1, 2.4),
+            word("and", 3.5, 3.7),
+            word("on", 3.7, 4.4),
+        ];
+        let ids = p.add_captions(&words, &Layout::default());
+        let spans: Vec<(Time, Time)> = ids
+            .iter()
+            .map(|id| {
+                let c = p.clip(*id).unwrap();
+                (c.start, c.end())
+            })
+            .collect();
+        // Off at the cut; after the pause, a line ending soon after its
+        // last word; the last off as the card comes in.
+        assert_eq!(spans, vec![(s(1.0), s(2.0)), (s(2.1), s(2.8)), (s(3.5), s(4.0))]);
+
+        // Narration cut into pieces on the bottom track is no cut in the picture.
+        let mut q = Project::default();
+        let voice = q.add_media(crate::model::Media {
+            id: crate::model::MediaId(0),
+            name: "v".into(),
+            hash: "v".into(),
+            ext: "wav".into(),
+            kind: crate::model::MediaKind::Audio,
+            duration: s(10.0),
+            width: 0,
+            height: 0,
+            has_audio: true,
+            source: Default::default(),
+            recipe: None,
+            content: None,
+            clicks: Vec::new(),
+        });
+        q.insert_clip(voice, 0, 0);
+        q.insert_clip(voice, 0, s(10.0));
+        assert!(q.caption_cuts().is_empty());
+    }
 
     fn said(words: &[(&str, f64, f64)]) -> Vec<Word> {
         words

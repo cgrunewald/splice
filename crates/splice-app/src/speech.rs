@@ -130,6 +130,51 @@ pub fn transcribe(path: &Path, from: Time, length: Time) -> Result<Vec<Heard>> {
         .collect())
 }
 
+/// The silences in `length` of `path` from `from` (from `from`, in order):
+/// stretches of a quarter second or more quieter than speech. Where none
+/// can be found (music under the voice), none.
+pub fn silences(path: &Path, from: Time, length: Time) -> Result<Vec<(Time, Time)>> {
+    let output = ffmpeg::export_command()?
+        .args(["-hide_banner", "-nostdin", "-loglevel", "info"])
+        .args([
+            "-ss",
+            &format!("{:.6}", secs(from)),
+            "-t",
+            &format!("{:.6}", secs(length)),
+            "-i",
+        ])
+        .arg(path)
+        .args(["-vn", "-af", "silencedetect=noise=-38dB:d=0.25", "-f", "null", "-"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        bail!("could not read the sound to find its pauses");
+    }
+    Ok(parse_silences(&String::from_utf8_lossy(&output.stderr), length))
+}
+
+fn parse_silences(log: &str, length: Time) -> Vec<(Time, Time)> {
+    let number = |line: &str, key: &str| -> Option<f64> {
+        let rest = &line[line.find(key)? + key.len()..];
+        rest.split_whitespace().next()?.trim_end_matches('|').parse().ok()
+    };
+    let mut out = Vec::new();
+    let mut open: Option<Time> = None;
+    for line in log.lines() {
+        if let Some(t) = number(line, "silence_start: ") {
+            open = Some(splice_core::time::from_secs(t.max(0.0)));
+        } else if let Some(t) = number(line, "silence_end: ") {
+            out.push((open.take().unwrap_or(0), splice_core::time::from_secs(t)));
+        }
+    }
+    // Silent to the end.
+    if let Some(a) = open {
+        out.push((a, length));
+    }
+    out
+}
+
 /// whisper-cli's JSON, one segment a token (`-ml 1`), as words: a token
 /// without a space before it is the rest of the word before ("every" +
 /// "body", "work" + "."), except in writing without spaces (Japanese,
@@ -182,6 +227,20 @@ fn parse(json: &str) -> Result<Vec<Heard>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn silences_are_read_from_ffmpeg() {
+        let log = "\
+[silencedetect @ 0x1] silence_start: 0.912
+[silencedetect @ 0x1] silence_end: 2.5 | silence_duration: 1.588
+size=N/A time=00:00:04.00 bitrate=N/A
+[silencedetect @ 0x1] silence_start: 3.75
+";
+        assert_eq!(
+            parse_silences(log, 4_000_000),
+            vec![(912_000, 2_500_000), (3_750_000, 4_000_000)]
+        );
+    }
 
     #[test]
     fn tokens_join_into_words_except_where_words_are_unspaced() {

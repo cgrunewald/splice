@@ -108,7 +108,10 @@ Transitions, speed and keyframes
                                  into pieces: name them all), in every clip with sound on track N, or
                                  in what sounds from T to T (with --track: on that track only). Lines
                                  of up to N words (6), each word lighting up as it is said (--plain:
-                                 whole lines). Each caption is a title to edit.
+                                 whole lines). Each caption is a title to edit. Word times are fitted
+                                 to the sound, so a line goes off soon after its last word, not
+                                 through a pause; no line runs across a cut on track 1 or the edge of
+                                 a full-frame colour (a title card).
                                  Where the clip reads the story's script, the words are written as the
                                  script has them, at the times they were heard (--heard: as heard)
   captions --file subtitles.srt  captions from an .srt or .vtt file

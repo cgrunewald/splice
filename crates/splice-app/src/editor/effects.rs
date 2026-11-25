@@ -530,12 +530,13 @@ impl Editor {
         });
         cx.notify();
         let asked: Vec<Clip> = jobs.iter().map(|(c, _)| c.clone()).collect();
+        let names = self.doc.project.names_to_hear();
         cx.spawn(async move |this, cx| {
             let heard = cx
                 .background_spawn(async move {
                     jobs.iter()
                         .map(|(clip, path)| {
-                            let heard = crate::speech::transcribe(path, clip.source_in, clip.span())?;
+                            let heard = crate::speech::transcribe(path, clip.source_in, clip.span(), &names)?;
                             // Times fitted to when there is sound: whisper's run over pauses.
                             let quiet = crate::speech::silences(path, clip.source_in, clip.span()).unwrap_or_default();
                             let words: Vec<splice_core::captions::Word> = heard
@@ -588,6 +589,8 @@ impl Editor {
                         end = end.max(now.end().min(to));
                     }
                     words.sort_by_key(|w| w.start);
+                    // Words it always mishears, put right.
+                    let words = splice_core::captions::respell(&words, &editor.doc.project.caption_fixes());
                     Ok((words, end))
                 });
                 let answer = match words {
@@ -692,6 +695,51 @@ impl Editor {
             self.selection = ids.clone();
             let clips: Vec<Value> = ids.iter().map(|id| self.clip_json(*id)).collect();
             return Some(self.edited_with(json!({ "clips": clips })));
+        }
+        // Names to spell right and words it mishears, kept with the project.
+        let names = request.get("names").and_then(Value::as_str);
+        let fixes = request.get("fix").and_then(Value::as_str);
+        let mut fixed = Vec::new();
+        for pair in fixes
+            .into_iter()
+            .flat_map(|f| f.split([';', '\n']))
+            .filter(|p| !p.trim().is_empty())
+        {
+            match pair.split_once('=') {
+                Some((heard, write)) if !heard.trim().is_empty() && !write.trim().is_empty() => {
+                    fixed.push((heard.to_string(), write.to_string()));
+                }
+                _ => {
+                    return Some(fail(format!(
+                        "--fix is HEARD=WRITTEN (\"How your=Halyard\"), not {pair:?}"
+                    )));
+                }
+            }
+        }
+        if names.is_some() || !fixed.is_empty() {
+            self.edit(cx, |p| {
+                if let Some(names) = names {
+                    p.spelling.add_names(names.split([',', '\n']));
+                }
+                for (heard, write) in &fixed {
+                    p.spelling.add_fix(heard, write);
+                }
+            });
+        }
+        let nothing_to_hear = request.get("clips").is_none()
+            && request.get("track").is_none()
+            && request.get("from").is_none()
+            && request.get("to").is_none();
+        if request.get("spelling").and_then(Value::as_bool) == Some(true)
+            || (nothing_to_hear && (names.is_some() || !fixed.is_empty()))
+        {
+            let project = &self.doc.project;
+            return Some(json!({
+                "ok": true,
+                "spelling": project.spelling.names,
+                "fixes": project.spelling.fixes.iter().map(|f| json!({ "heard": f.heard, "write": f.write })).collect::<Vec<_>>(),
+                "listening_for": project.names_to_hear(),
+            }));
         }
         let mut ids = match self.clips_of(request) {
             Ok(ids) => ids,

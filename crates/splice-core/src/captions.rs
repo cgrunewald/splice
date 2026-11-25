@@ -7,6 +7,117 @@ use crate::model::{ClipId, Generator, Project, Title};
 use crate::textmotion::{By, Style, TextMotion};
 use crate::time::{SECOND, Time};
 
+/// How captions spell what they hear: names to listen for (handed to the
+/// speech model, which then favours those spellings) and words it
+/// mishears, put right after every hearing.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Spelling {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<Fix>,
+}
+
+/// Heard as `heard` (one word or several), written `write`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Fix {
+    pub heard: String,
+    pub write: String,
+}
+
+impl Spelling {
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty() && self.fixes.is_empty()
+    }
+
+    /// Adds names, each once (capitals aside).
+    pub fn add_names<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) {
+        for name in names.into_iter().map(str::trim).filter(|n| !n.is_empty()) {
+            if !self.names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                self.names.push(name.to_string());
+            }
+        }
+    }
+
+    /// Adds a fix, replacing one for the same words.
+    pub fn add_fix(&mut self, heard: &str, write: &str) {
+        let heard = heard.trim();
+        self.fixes.retain(|f| !f.heard.eq_ignore_ascii_case(heard));
+        self.fixes.push(Fix {
+            heard: heard.to_string(),
+            write: write.trim().to_string(),
+        });
+    }
+}
+
+/// Puts right what the speech model mishears: each run of words that reads
+/// as a fix's `heard` (capitals and punctuation aside) becomes its `write`,
+/// said from the first word's start to the last's end, keeping the last
+/// word's punctuation after it.
+pub fn respell(words: &[Word], fixes: &[Fix]) -> Vec<Word> {
+    fn bare(w: &str) -> String {
+        w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+            .to_lowercase()
+    }
+    let fixes: Vec<(Vec<String>, &str)> = fixes
+        .iter()
+        .map(|f| {
+            (
+                f.heard.split_whitespace().map(bare).collect::<Vec<_>>(),
+                f.write.as_str(),
+            )
+        })
+        .filter(|(h, _)| !h.is_empty())
+        .collect();
+    let mut out = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        // The longest fix that matches here.
+        let found = fixes
+            .iter()
+            .filter(|(heard, _)| {
+                i + heard.len() <= words.len() && heard.iter().zip(&words[i..]).all(|(h, w)| *h == bare(&w.text))
+            })
+            .max_by_key(|(heard, _)| heard.len());
+        let Some((heard, write)) = found else {
+            out.push(words[i].clone());
+            i += 1;
+            continue;
+        };
+        let last = &words[i + heard.len() - 1];
+        // As many words written as heard: each keeps its own time.
+        let written: Vec<&str> = write.split_whitespace().collect();
+        if written.len() == heard.len() && written.len() > 1 {
+            for (w, said) in written.iter().zip(&words[i..]) {
+                let keep = said.text.trim_end_matches(|c: char| !c.is_alphanumeric()).len();
+                let trail = &said.text[keep..];
+                out.push(Word {
+                    text: format!("{w}{trail}"),
+                    ..said.clone()
+                });
+            }
+            i += heard.len();
+            continue;
+        }
+        let trail: String = last
+            .text
+            .chars()
+            .rev()
+            .take_while(|c| !c.is_alphanumeric())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        out.push(Word {
+            text: format!("{write}{trail}"),
+            start: words[i].start,
+            end: last.end,
+        });
+        i += heard.len();
+    }
+    out
+}
+
 /// A word and when it is said, in timeline time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
@@ -450,6 +561,68 @@ impl Project {
     }
 }
 
+impl Project {
+    /// What to put right in words heard: the fixes given, then each name
+    /// to hear written as it is spelled (heard right, a name can still come
+    /// out in small letters).
+    pub fn caption_fixes(&self) -> Vec<Fix> {
+        let mut fixes = self.spelling.fixes.clone();
+        for name in self.names_to_hear() {
+            if !fixes.iter().any(|f| f.heard.eq_ignore_ascii_case(&name)) {
+                fixes.push(Fix {
+                    heard: name.clone(),
+                    write: name,
+                });
+            }
+        }
+        fixes
+    }
+
+    /// The names to listen for when captioning: those given, then the
+    /// names of who and what is in the bible, then the capitalised words of
+    /// titles and beat titles (not captions, which are what was heard). As
+    /// one prompt for the speech model, kept short: it reads only so much.
+    pub fn names_to_hear(&self) -> Vec<String> {
+        let mut names = Spelling::default();
+        names.add_names(self.spelling.names.iter().map(String::as_str));
+        names.add_names(self.bible.entries.iter().map(|e| e.name.as_str()));
+        let titles = self
+            .tracks
+            .iter()
+            .flat_map(|t| &t.clips)
+            .filter_map(|c| match &c.generator {
+                Some(Generator::Text(t)) if t.timing.is_empty() => Some(t.text.as_str()),
+                _ => None,
+            })
+            .chain(self.story.beats.iter().map(|b| b.title.as_str()));
+        for text in titles {
+            for sentence in text.split(['.', '!', '?', '\n']) {
+                // A capital after the first word is a name, not the start of a sentence.
+                let words = sentence.split_whitespace().skip(1);
+                names.add_names(
+                    words
+                        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+                        .filter(|w| {
+                            w.chars().next().is_some_and(char::is_uppercase)
+                                && w.chars().count() > 1
+                                && !w.chars().all(|c| c.is_uppercase() || !c.is_alphabetic())
+                        }),
+                );
+            }
+        }
+        let mut out = Vec::new();
+        let mut length = 0;
+        for name in names.names {
+            length += name.len() + 2;
+            if length > 600 {
+                break;
+            }
+            out.push(name);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -523,6 +696,83 @@ mod tests {
         q.insert_clip(voice, 0, 0);
         q.insert_clip(voice, 0, s(10.0));
         assert!(q.caption_cuts().is_empty());
+    }
+
+    fn spoken(text: &str) -> Vec<Word> {
+        text.split_whitespace()
+            .enumerate()
+            .map(|(i, w)| Word {
+                text: w.into(),
+                start: i as Time * SECOND,
+                end: i as Time * SECOND + SECOND / 2,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn misheard_words_are_put_right() {
+        let mut spelling = Spelling::default();
+        spelling.add_fix("How your", "Halyard");
+        spelling.add_fix("how you're", "Halyard's");
+        spelling.add_fix("allure", "Halyard");
+        let out = respell(
+            &spoken("So How your signs it. Then how you're signed, Allure!"),
+            &spelling.fixes,
+        );
+        let text: Vec<&str> = out.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(
+            text,
+            [
+                "So",
+                "Halyard",
+                "signs",
+                "it.",
+                "Then",
+                "Halyard's",
+                "signed,",
+                "Halyard!"
+            ]
+        );
+        // Two words heard become one, said over both.
+        assert_eq!((out[1].start, out[1].end), (SECOND, 2 * SECOND + SECOND / 2));
+        // A fix for the same words replaces the last one.
+        spelling.add_fix("ALLURE", "Hallyard");
+        assert_eq!(spelling.fixes.len(), 3);
+    }
+
+    #[test]
+    fn names_come_from_what_the_project_knows() {
+        let mut p = Project::default();
+        p.spelling.add_names(["Halyard", "halyard", "Avery Lund"]);
+        p.insert_generated(
+            Generator::Text(Title {
+                text: "Meet Avery Lund. Welcome to Northwind, the AI desk".into(),
+                ..Title::default()
+            }),
+            0,
+            0,
+            SECOND,
+        );
+        // Captions are what was heard, not a source of names.
+        p.insert_generated(
+            Generator::Text(Title {
+                text: "so How your works".into(),
+                timing: vec![0, 1, 2],
+                ..Title::default()
+            }),
+            1,
+            0,
+            SECOND,
+        );
+        let names = p.names_to_hear();
+        assert_eq!(names, ["Halyard", "Avery Lund", "Avery", "Lund", "Northwind"]);
+        // Heard right but in small letters, names get their capitals.
+        let out = respell(
+            &spoken("then avery lund checks what halyard signed."),
+            &p.caption_fixes(),
+        );
+        let text: Vec<&str> = out.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(text, ["then", "Avery", "Lund", "checks", "what", "Halyard", "signed."]);
     }
 
     fn said(words: &[(&str, f64, f64)]) -> Vec<Word> {

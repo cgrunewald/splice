@@ -74,8 +74,9 @@ pub struct Heard {
 }
 
 /// The words said in `length` of `path` from `from`. Blocking: about a
-/// second for every ten of speech.
-pub fn transcribe(path: &Path, from: Time, length: Time) -> Result<Vec<Heard>> {
+/// second for every ten of speech. `names` are spellings to listen for
+/// (people, products): the model favours them.
+pub fn transcribe(path: &Path, from: Time, length: Time, names: &[String]) -> Result<Vec<Heard>> {
     let whisper = whisper().context(INSTALL)?;
     let model = fetch_model()?;
     // Its own folder: two clips can be heard at once.
@@ -102,13 +103,19 @@ pub fn transcribe(path: &Path, from: Time, length: Time) -> Result<Vec<Heard>> {
         let _ = std::fs::remove_dir_all(&work);
         bail!("could not read the sound to hear it");
     }
-    let output = Command::new(whisper)
+    let mut command = Command::new(whisper);
+    command
         .arg("-m")
         .arg(&model)
         .arg("-f")
         .arg(&wav)
         .args(["-l", "auto", "-ml", "1", "-oj", "-np", "-of"])
-        .arg(work.join("words"))
+        .arg(work.join("words"));
+    if !names.is_empty() {
+        // Read as words heard before this: it carries their spelling.
+        command.arg("--prompt").arg(names.join(", "));
+    }
+    let output = command
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
@@ -312,7 +319,7 @@ size=N/A time=00:00:04.00 bitrate=N/A
             let _ = std::fs::remove_dir_all(dir);
             return;
         }
-        let words = transcribe(&speech, 0, 5 * splice_core::time::SECOND).unwrap();
+        let words = transcribe(&speech, 0, 5 * splice_core::time::SECOND, &[]).unwrap();
         let text: Vec<String> = words.iter().map(|w| w.text.to_lowercase()).collect();
         assert!(text.iter().any(|w| w.starts_with("hello")), "{text:?}");
         assert!(words.windows(2).all(|p| p[0].start <= p[1].start));

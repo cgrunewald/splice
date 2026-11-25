@@ -230,12 +230,20 @@ splice ctl keyframe --clip 7 --at 14 --drop                # or --clear for all 
 splice ctl captions --clip 3 --wait        # hear what is said; captions on a new track
 splice ctl captions --clip 3 --words 4 --plain --wait   # shorter lines, appearing whole
 splice ctl captions --clip 31,32,33 --wait # narration cut into pieces: one set of captions, timeline times
+splice ctl captions --names "Halyard, Avery Lund" --fix "How your=Halyard"   # spellings kept with the project
 splice ctl captions --track 5 --wait       # every clip with sound on the narration's track
 splice ctl captions --track 5 --from 60 --to 90 --wait   # only what is said in that stretch
 splice ctl captions --file talk.srt        # or from a subtitle file (.srt, .vtt)
 splice ctl text --text "Three things" --animate rise --by word --over 1.2
 splice ctl style --clip 12 --animate pop --by letter     # --animate none: all at once
 ```
+
+- Before captioning a video with product or people's names in it, give
+  them with `--names` (once; they are kept with the project). Whisper
+  listens for them, and they come out with their capitals. Names in the
+  bible, titles and beat titles are listened for already. A word still
+  misheard every time goes in `--fix "HEARD=WRITTEN"`, put right in every
+  captioning after. `captions --spelling` lists both.
 
 - Captions are heard on this Mac with whisper.cpp; if it is missing the
   reply says to `brew install whisper-cpp`. The first time, a 148 MB speech

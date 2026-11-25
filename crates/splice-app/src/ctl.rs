@@ -50,6 +50,10 @@ Editing (each is one undo step; clips and media are named by id, media also by n
                                  playing from S of its media for D (default: as the original). Placed
                                  like add: `rose` if the track is taken there
   volume --clip C --value V                1 is as recorded, 0 silent, up to 4
+  sync --media M|--clip C --offset S       a camera's picture runs S seconds behind the voice (0.12;
+                                 less than 0 if ahead; 0 undoes): every clip of that video shows its
+                                 picture S later in the file, so lips meet the voice. Clips, sound
+                                 and keyframes stay where they are. `read` shows each media's `sync`
   clean --clip C [--noise F] [--even/--no-even] | --off
                                  clean up a voice: rumble cut, steady noise down (0 to 1, 0.5), level evened out
   track --track N [--mute|--unmute] [--hide|--show]
@@ -613,7 +617,7 @@ fn build(args: &[String]) -> Result<Value, String> {
             | "--crop-left" | "--crop-top" | "--crop-right" | "--crop-bottom" | "--exposure" | "--contrast"
             | "--saturation" | "--warmth" | "--tint" | "--rate" | "--blur" | "--vignette" | "--grain" | "--shake"
             | "--glitch" | "--backdrop-blur" | "--backdrop-dim" | "--redact-x" | "--redact-y" | "--redact-width"
-            | "--redact-height" | "--noise" => {
+            | "--redact-height" | "--noise" | "--offset" => {
                 let raw = next(arg)?;
                 let v = match raw.parse::<f64>() {
                     Ok(v) => json!(v),
@@ -771,7 +775,7 @@ fn build(args: &[String]) -> Result<Value, String> {
         "status" | "read" | "versions" | "add" | "move" | "trim" | "split" | "delete" | "duplicate" | "volume"
         | "clean" | "track" | "canvas" | "undo" | "redo" | "play" | "pause" | "select" | "save" | "say" | "wait"
         | "text" | "color" | "style" | "look" | "fonts" | "transition" | "speed" | "freeze" | "keyframe" | "leak"
-        | "captions" | "zoom" | "insert-time" | "remove-time" => command.as_str(),
+        | "captions" | "zoom" | "insert-time" | "remove-time" | "sync" => command.as_str(),
         "restore" => {
             if let Some(id) = words.first().and_then(|w| w.parse::<u64>().ok()) {
                 request.insert("version".into(), json!(id));

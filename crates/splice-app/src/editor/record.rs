@@ -602,6 +602,7 @@ impl Editor {
                             recipe: None,
                             content: None,
                             clicks: recorder::read_clicks(&path),
+                            sync: 0,
                         });
                         ids.insert(name, id);
                         added.push((project.media(id).cloned().expect("just added"), path));

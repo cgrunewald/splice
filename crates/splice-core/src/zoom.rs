@@ -132,6 +132,7 @@ mod tests {
                     y: 0.5,
                 },
             ],
+            sync: 0,
         });
         let clip = p.append_clip(m).unwrap();
         assert_eq!(p.zoom_to_clicks(clip, 2.0), 2, "two bursts");

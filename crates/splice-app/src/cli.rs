@@ -108,6 +108,7 @@ fn new(path: &Path, media: &[String]) -> anyhow::Result<()> {
             recipe: None,
             content: None,
             clicks: Vec::new(),
+            sync: 0,
         });
         project.append_clip(id);
     }

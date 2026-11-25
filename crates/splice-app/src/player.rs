@@ -279,7 +279,7 @@ impl Player {
         let frame = project.frame();
         let shown_at = |clip: &Clip, m: &Media| {
             if m.kind == MediaKind::Video {
-                floor_to_frame(clip.source_at(position).clamp(0, (m.duration - frame).max(0)), fps)
+                floor_to_frame(m.picture_at(clip.source_at(position), frame), fps)
             } else {
                 0
             }
@@ -406,7 +406,7 @@ impl Player {
                     keep_streams.insert(clip.id);
                     let size = self.decode_size((media.width, media.height));
                     let filters = clip.look.pixel_filters(size, scale_of(size, media), "p");
-                    let source = clip.source_at(drawn.from).clamp(0, (media.duration - frame).max(0));
+                    let source = media.picture_at(clip.source_at(drawn.from), frame);
                     self.ensure_stream(clip, media, &filters, path, source, fps, size);
                     // Its backdrop too, so a cut into it is not black at the sides.
                     if clip.look.backdrop.is_some() {

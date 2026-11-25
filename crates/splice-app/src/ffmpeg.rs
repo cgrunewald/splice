@@ -77,7 +77,7 @@ pub fn prepare(plan: &splice_core::export::Plan, going: impl Fn() -> bool) -> Re
         let out = export_command()?.args(command).stdout(Stdio::null()).output()?;
         if !out.status.success() {
             let text = String::from_utf8_lossy(&out.stderr);
-            bail!("{}", text.lines().last().unwrap_or("could not reverse a clip"));
+            bail!("{}", first_error(&text, "could not reverse a clip"));
         }
     }
     Ok(())
@@ -87,6 +87,44 @@ pub fn prepare(plan: &splice_core::export::Plan, going: impl Fn() -> bool) -> Re
 pub fn tidy(plan: &splice_core::export::Plan) {
     if let Some(dir) = &plan.scratch {
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// The line of ffmpeg's errors that says what went wrong: the first that
+/// names an error or a failure. The last line is usually a consequence
+/// ("Conversion failed!", "no packets"), not the cause.
+pub fn first_error(stderr: &str, fallback: &str) -> String {
+    let lines = || stderr.lines().map(str::trim).filter(|l| !l.is_empty());
+    let cause = lines().find(|l| {
+        let l = l.to_lowercase();
+        l.contains("error") || l.contains("failed") || l.contains("invalid") || l.contains("cannot")
+    });
+    let Some(line) = cause.or_else(|| lines().next_back()) else {
+        return fallback.to_string();
+    };
+    match lines().filter(|l| *l == line).count() {
+        1 => line.to_string(),
+        n => format!("{line} ({n} times)"),
+    }
+}
+
+/// What to say when a movie export fails: the line that caused it, with
+/// all of ffmpeg's errors kept beside the movie for a closer look. The
+/// empty movie it leaves is removed.
+pub fn export_failed(stderr: &str, output: &Path) -> String {
+    let cause = first_error(stderr, "ffmpeg failed");
+    if std::fs::metadata(output).is_ok_and(|m| m.len() == 0) {
+        let _ = std::fs::remove_file(output);
+    }
+    if stderr.trim().is_empty() {
+        return cause;
+    }
+    let mut log = output.as_os_str().to_owned();
+    log.push(".log");
+    let log = PathBuf::from(log);
+    match std::fs::write(&log, stderr) {
+        Ok(()) => format!("{cause} (all of ffmpeg's errors: {})", log.display()),
+        Err(_) => cause,
     }
 }
 
@@ -578,6 +616,38 @@ impl Drop for FrameStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cause_is_reported_not_its_consequence() {
+        let stderr = "\
+[swscaler @ 0x1] Failed initializing scaling graph (Resource temporarily unavailable): fmt:rgba -> fmt:gbrap
+[swscaler @ 0x1] Failed initializing scaling graph (Resource temporarily unavailable): fmt:rgba -> fmt:gbrap
+[vost#0:0/libx264] Error while opening encoder
+[out#0/mp4 @ 0x2] Nothing was written into output file, because at least one of its streams received no packets.
+Conversion failed!
+";
+        assert_eq!(
+            first_error(stderr, "x"),
+            "[swscaler @ 0x1] Failed initializing scaling graph (Resource temporarily unavailable): \
+             fmt:rgba -> fmt:gbrap (2 times)"
+        );
+        assert_eq!(first_error("", "ffmpeg failed"), "ffmpeg failed");
+        assert_eq!(first_error("just this\n", "x"), "just this");
+
+        let dir = std::env::temp_dir().join(format!("splice-ffmpeg-error-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("movie.mp4");
+        std::fs::write(&out, b"").unwrap();
+        let said = export_failed(stderr, &out);
+        assert!(!out.exists(), "the empty movie is removed");
+        let log = dir.join("movie.mp4.log");
+        assert!(
+            said.ends_with(&format!("(all of ffmpeg's errors: {})", log.display())),
+            "{said}"
+        );
+        assert_eq!(std::fs::read_to_string(log).unwrap(), stderr);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Makes a 2s 64x36 test clip with a tone; None when ffmpeg is missing.
     fn sample(dir: &Path) -> Option<PathBuf> {

@@ -466,7 +466,7 @@ pub fn render(
     let status = status?;
     let errors = errors.join().unwrap_or_default();
     if !status.success() {
-        bail!("{}", errors.lines().last().unwrap_or("ffmpeg failed"));
+        bail!("{}", ffmpeg::first_error(&errors, "ffmpeg failed"));
     }
     let content = content_of(&partial);
     std::fs::rename(&partial, out)?;

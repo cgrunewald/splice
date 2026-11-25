@@ -1574,6 +1574,7 @@ impl Editor {
         }));
         let shared = job.clone();
         let duration = plan.duration;
+        let out = output.clone();
         std::thread::spawn(move || {
             let result = (|| -> Result<(), String> {
                 let going = || !shared.lock().unwrap().cancelled;
@@ -1611,7 +1612,7 @@ impl Editor {
                 match status {
                     Some(Ok(s)) if s.success() => Ok(()),
                     None => Err("cancelled".to_string()),
-                    _ => Err(errors.lines().last().unwrap_or("ffmpeg failed").to_string()),
+                    _ => Err(ffmpeg::export_failed(&errors, &out)),
                 }
             })();
             ffmpeg::tidy(&plan);

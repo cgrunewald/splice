@@ -383,6 +383,62 @@ impl Editor {
                 }
                 self.edited()
             }
+            "insert-time" | "remove-time" => {
+                let hold: Vec<usize> = match request.get("hold") {
+                    None => Vec::new(),
+                    Some(v) => {
+                        let tracks = self.doc.project.tracks.len();
+                        let picked: Option<Vec<usize>> = v.as_array().and_then(|a| {
+                            a.iter()
+                                .map(|n| {
+                                    n.as_u64()
+                                        .filter(|n| (1..=tracks as u64).contains(n))
+                                        .map(|n| n as usize - 1)
+                                })
+                                .collect()
+                        });
+                        match picked {
+                            Some(p) => p,
+                            None => return Some(fail(format!("--hold names tracks, 1 to {tracks}"))),
+                        }
+                    }
+                };
+                let done = if cmd == "insert-time" {
+                    let at = match self.time(request, "at") {
+                        Ok(Some(t)) => t,
+                        Ok(None) => return Some(fail("say where with --at T")),
+                        Err(e) => return Some(fail(e)),
+                    };
+                    let Some(by) = request.get("for").and_then(Value::as_f64).filter(|d| *d > 0.0) else {
+                        return Some(fail("say how long with --for SECONDS"));
+                    };
+                    let by = from_secs(by);
+                    self.edit(cx, |p| p.insert_time(at, by, &hold))
+                } else {
+                    let (from, to) = match (self.time(request, "from"), self.time(request, "to")) {
+                        (Ok(Some(a)), Ok(Some(b))) if b > a => (a, b),
+                        (Ok(Some(_)), Ok(Some(_))) => return Some(fail("--to is after --from")),
+                        (Err(e), _) | (_, Err(e)) => return Some(fail(e)),
+                        _ => return Some(fail("say which stretch with --from A --to B")),
+                    };
+                    self.edit(cx, |p| p.remove_time(from, to, &hold))
+                };
+                let ids = |ids: &[ClipId]| json!(ids.iter().map(|c| c.0).collect::<Vec<_>>());
+                let mut answer = self.edited_with(json!({
+                    "moved": ids(&done.moved),
+                    "split": done.split.iter().map(|(l, r)| json!({ "clip": l.0, "right": r.0 })).collect::<Vec<_>>(),
+                    "held": ids(&done.held),
+                }));
+                if !done.removed.is_empty() {
+                    answer["removed"] = ids(&done.removed);
+                }
+                if !done.ran_out.is_empty() {
+                    answer["ran_out"] = ids(&done.ran_out);
+                    answer["note"] =
+                        json!("clips on a held track had no more source to play, so they were cut like the rest");
+                }
+                answer
+            }
             "duplicate" => {
                 let ids = match self.clips(request) {
                     Ok(ids) => ids,

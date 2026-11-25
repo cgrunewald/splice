@@ -12,6 +12,7 @@ pub mod leaks;
 pub mod look;
 pub mod model;
 pub mod motion;
+pub mod ripple;
 pub mod score;
 pub mod script;
 pub mod store;

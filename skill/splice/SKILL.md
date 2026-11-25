@@ -93,6 +93,8 @@ splice ctl move --clip 7 --to 10 --track 1
 splice ctl trim --clip 7 --start 11.2 --end 15      # where its edges go, in timeline seconds
 splice ctl split --at 8.5                           # every clip under 8.5s; --clip 3 for one
 splice ctl delete --clip 4,5 --ripple               # --ripple closes the gap
+splice ctl insert-time --at 82.6 --for 1.5 --hold 3 # a pause on every track; track 3 (music) plays on
+splice ctl remove-time --from 40 --to 41.2          # take a stretch out of every track
 splice ctl duplicate --clip 3
 splice ctl volume --clip 9 --value 0.4              # 1 as recorded, 0 silent
 splice ctl clean --clip 9 --noise 0.6 --even        # clean up a voice (--off to undo)
@@ -113,6 +115,15 @@ splice ctl undo
   when a clip landed somewhere other than asked (`trimmed`, `rose`,
   `clamped`).
 - `split` returns the new right halves under `new`.
+- To slow a finished cut down or tighten it, use `insert-time` and
+  `remove-time`, not edits clip by clip: they move every track together, in
+  one undo step. A clip across the moment is cut there (`split`), except
+  titles, captions, colours and pictures, which get longer or shorter
+  (`held`), keeping their keyframes and caption words on the moments they
+  belong to. Name music and backdrop tracks with `--hold` so they play on
+  rather than leaving a gap; one with no source left is cut anyway
+  (`ran_out`). The gap left in the voice and camera is silent and black:
+  fill it yourself if it needs room tone.
 - Read the reply: it has the clip as it ended up, the new `duration` and
   `revision`. If something failed, read again and retry once; if it fails
   twice, tell the user what happened.

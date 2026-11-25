@@ -34,6 +34,12 @@ Editing (each is one undo step; clips and media are named by id, media also by n
   trim --clip C [--start T] [--end T]      move a clip's left or right edge to T
   split [--at T] [--clip C]                cut at T (default: the playhead) every clip under it, or C
   delete --clip C [--ripple]               remove clips; --ripple closes the gap
+  insert-time --at T --for D [--hold N,M]  put D seconds in at T on every track: what starts at or after T
+                                 moves along, a clip across T is cut there (its right half moves),
+                                 titles, captions, colours and pictures across it get longer, and so
+                                 do clips on tracks N,M (music, a backdrop) with the source to. Their
+                                 keyframes and caption words keep their moments. Beats and cues follow
+  remove-time --from A --to B [--hold N,M] take A to B out of every track, closing it up (the opposite)
   duplicate --clip C                       copy clips to just after themselves
   volume --clip C --value V                1 is as recorded, 0 silent, up to 4
   clean --clip C [--noise F] [--even/--no-even] | --off
@@ -662,6 +668,17 @@ fn build(args: &[String]) -> Result<Value, String> {
                 let v: f64 = next(arg)?.parse().map_err(|_| "--value expects a number".to_string())?;
                 request.insert("value".into(), json!(v));
             }
+            "--hold" => {
+                let mut tracks = Vec::new();
+                for n in next(arg)?.split(',').filter(|s| !s.trim().is_empty()) {
+                    tracks.push(json!(
+                        n.trim()
+                            .parse::<u64>()
+                            .map_err(|_| "--hold expects track numbers: 3,4")?
+                    ));
+                }
+                request.insert("hold".into(), json!(tracks));
+            }
             "--clip" => {
                 for id in next(arg)?.split(',').filter(|s| !s.trim().is_empty()) {
                     clips.push(json!(id.trim().parse::<u64>().map_err(|_| "--clip expects clip ids")?));
@@ -734,7 +751,7 @@ fn build(args: &[String]) -> Result<Value, String> {
         "status" | "read" | "versions" | "add" | "move" | "trim" | "split" | "delete" | "duplicate" | "volume"
         | "clean" | "track" | "canvas" | "undo" | "redo" | "play" | "pause" | "select" | "save" | "say" | "wait"
         | "text" | "color" | "style" | "look" | "fonts" | "transition" | "speed" | "freeze" | "keyframe" | "leak"
-        | "captions" | "zoom" => command.as_str(),
+        | "captions" | "zoom" | "insert-time" | "remove-time" => command.as_str(),
         "restore" => {
             if let Some(id) = words.first().and_then(|w| w.parse::<u64>().ok()) {
                 request.insert("version".into(), json!(id));
@@ -1010,6 +1027,8 @@ mod tests {
         assert_eq!(r, json!({"cmd": "move", "clips": [3, 4], "to": 90.0, "track": 2}));
         let r = build(&args("speed --clip 5 --for 3.2 --ripple all")).unwrap();
         assert_eq!((r["for"].as_f64(), r["ripple"].as_str()), (Some(3.2), Some("all")));
+        let r = build(&args("insert-time --at 1:22.5 --for 2.5 --hold 1,3")).unwrap();
+        assert_eq!(r, json!({"cmd": "insert-time", "at": 82.5, "for": 2.5, "hold": [1, 3]}));
         let r = build(&args("delete --clip 5 --ripple")).unwrap();
         assert_eq!(r["ripple"], json!(true));
         let r = build(&args("add --media logo.png --at end")).unwrap();

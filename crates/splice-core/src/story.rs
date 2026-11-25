@@ -223,6 +223,43 @@ impl Story {
         Some((start, start + self.beats[i].duration))
     }
 
+    /// Time put into the cut at `at`: the beat across it (or ending there:
+    /// a pause after its last line) gets longer, so later beats start with
+    /// their footage; later cues move along.
+    pub fn insert_time(&mut self, at: Time, by: Time) {
+        let starts = self.starts();
+        if let Some(i) = starts
+            .iter()
+            .zip(&self.beats)
+            .position(|(s, b)| at > *s && at <= s + b.duration)
+        {
+            self.beats[i].duration += by;
+        }
+        for cue in self.cues.iter_mut().filter(|c| c.at >= at) {
+            cue.at += by;
+        }
+    }
+
+    /// Time from `from` to `to` taken out of the cut: beats lose the part of
+    /// it they had (never under `least`), cues in it go to `from`, later
+    /// ones move up.
+    pub fn remove_time(&mut self, from: Time, to: Time, least: Time) {
+        let starts = self.starts();
+        for (beat, start) in self.beats.iter_mut().zip(starts) {
+            let overlap = (start + beat.duration).min(to) - start.max(from);
+            if overlap > 0 {
+                beat.duration = (beat.duration - overlap).max(least);
+            }
+        }
+        for cue in &mut self.cues {
+            if cue.at >= to {
+                cue.at -= to - from;
+            } else if cue.at > from {
+                cue.at = from;
+            }
+        }
+    }
+
     /// The beat under `t`.
     pub fn beat_at(&self, t: Time) -> Option<&Beat> {
         let starts = self.starts();
